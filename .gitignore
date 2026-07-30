@@ -24,3 +24,8 @@ env/
 .DS_Store
 .vscode/
 .idea/
+
+
+# Credenciales: TODAS las variantes (copias, .bak, .local...)
+.streamlit/secrets*
+!.streamlit/secrets.toml.example
