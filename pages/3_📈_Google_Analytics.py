@@ -138,31 +138,62 @@ cg = datos.ga4_campana
 if cg.empty:
     st.info("Sin datos de campaña.")
 else:
-    fcol1, fcol2 = st.columns(2)
-    fuentes = sorted(cg["fuente"].dropna().unique()) if "fuente" in cg.columns else []
-    sel_f = fcol1.multiselect("Filtrar por fuente", fuentes, placeholder="Todas las fuentes")
-    cg_f = cg[cg["fuente"].isin(sel_f)] if sel_f else cg
-    campanas = sorted(cg_f["campana"].dropna().unique()) if "campana" in cg_f.columns else []
-    sel_c = fcol2.multiselect("Filtrar por campaña", campanas, placeholder="Todas las campañas")
-    if sel_c:
-        cg_f = cg_f[cg_f["campana"].isin(sel_c)]
-
-    ui.tabla_totales(
-        cg_f,
-        columnas=["fuente", "campana", "sesiones", "usuarios", "eventos", "eventos_clave"],
-        sum_cols=["sesiones", "usuarios", "eventos", "eventos_clave"],
-        column_config={
-            "fuente": "Fuente",
-            "campana": "Campaña",
-            "sesiones": st.column_config.NumberColumn("Sesiones", format="%d"),
-            "usuarios": st.column_config.NumberColumn("Usuarios", format="%d"),
-            "eventos": st.column_config.NumberColumn("Eventos", format="%d"),
-            "eventos_clave": st.column_config.NumberColumn("Eventos clave", format="%d"),
-        },
-    )
+    cg = cg.copy()
+    cg["programa"] = cg["campana"].map(config.programa_por_campana)
+    _mets = dict(sesiones=("sesiones", "sum"), usuarios=("usuarios", "sum"),
+                 eventos=("eventos", "sum"), eventos_clave=("eventos_clave", "sum"))
+    modo = st.radio("Agrupar por", ["Programa", "Campaña (UTM)"], horizontal=True,
+                    help="Las UTM llegan con formatos distintos (guiones, acentos, +, castellano/català…) "
+                         "y GA4 fragmenta la misma campaña. 'Programa' consolida todas las variantes.")
+    if modo == "Programa":
+        # Consolida TODAS las variantes por programa (la clave más robusta).
+        cons = cg.groupby("programa", as_index=False).agg(**_mets).sort_values(
+            "sesiones", ascending=False)
+        ui.tabla_totales(
+            cons,
+            columnas=["programa", "sesiones", "usuarios", "eventos", "eventos_clave"],
+            sum_cols=["sesiones", "usuarios", "eventos", "eventos_clave"],
+            column_config={
+                "programa": "Programa",
+                "sesiones": st.column_config.NumberColumn("Sesiones", format="%d"),
+                "usuarios": st.column_config.NumberColumn("Usuarios", format="%d"),
+                "eventos": st.column_config.NumberColumn("Eventos", format="%d"),
+                "eventos_clave": st.column_config.NumberColumn("Eventos clave", format="%d"),
+            },
+        )
+    else:
+        # Detalle por campaña, deduplicando variantes idénticas (clave normalizada)
+        # y etiquetando cada una con su programa. Con filtros de fuente y campaña.
+        cg["_k"] = cg["campana"].map(config.clave_campana)
+        _rep = (cg.sort_values("sesiones", ascending=False)
+                .groupby("_k", as_index=False).first()[["_k", "campana", "programa", "fuente"]])
+        _ag = cg.groupby("_k", as_index=False).agg(**_mets)
+        det = _rep.merge(_ag, on="_k").drop(columns="_k").sort_values(
+            ["programa", "sesiones"], ascending=[True, False])
+        fcol1, fcol2 = st.columns(2)
+        fuentes = sorted(det["fuente"].dropna().unique())
+        sel_f = fcol1.multiselect("Filtrar por fuente", fuentes, placeholder="Todas las fuentes")
+        det_f = det[det["fuente"].isin(sel_f)] if sel_f else det
+        campanas = sorted(det_f["campana"].dropna().unique())
+        sel_c = fcol2.multiselect("Filtrar por campaña", campanas, placeholder="Todas las campañas")
+        if sel_c:
+            det_f = det_f[det_f["campana"].isin(sel_c)]
+        ui.tabla_totales(
+            det_f,
+            columnas=["programa", "campana", "fuente", "sesiones", "usuarios", "eventos", "eventos_clave"],
+            sum_cols=["sesiones", "usuarios", "eventos", "eventos_clave"],
+            column_config={
+                "programa": "Programa", "fuente": "Fuente", "campana": "Campaña (UTM)",
+                "sesiones": st.column_config.NumberColumn("Sesiones", format="%d"),
+                "usuarios": st.column_config.NumberColumn("Usuarios", format="%d"),
+                "eventos": st.column_config.NumberColumn("Eventos", format="%d"),
+                "eventos_clave": st.column_config.NumberColumn("Eventos clave", format="%d"),
+            },
+        )
 st.caption(
-    "**Eventos** = total de interacciones registradas. **Eventos clave** = los marcados "
-    "como conversión en GA4. Ambas tablas están filtradas a las 5 landings WeRise."
+    "**Eventos** = total de interacciones registradas. **Eventos clave** = los marcados como conversión "
+    "en GA4. Vista **Programa** = consolida todas las variantes de UTM de un mismo programa; vista "
+    "**Campaña (UTM)** = una fila por campaña (variantes idénticas ya unificadas). Filtrado a las landings WeRise."
 )
 
 st.divider()
