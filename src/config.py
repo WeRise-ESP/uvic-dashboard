@@ -254,11 +254,22 @@ def programa_por_curso(uvic_curso: str) -> str:
 # Dominio: https://cloud.info-uvic.cat  (en GA4 el pagePath es solo la ruta)
 # --------------------------------------------------------------------------- #
 LANDING_PROGRAMA = {
+    # MBA Executive
     "/master-executive-mba-uvic": "MBA Executive",
+    "/mba-executive-uvic": "MBA Executive",
+    "/esp-emba": "MBA Executive",
+    # Marketing Deportivo
     "/master-sport-management-uvic": "Marketing Deportivo",
+    # Documentación Social
     "/Postgrau-Documental-Social": "Documentación Social",
+    # Comunicación Científica
     "/Comunicacio-Cientifica": "Comunicación Científica",
+    "/comunicacion-cientifica-uvic": "Comunicación Científica",
+    "/esp-comunicacion-cientifica": "Comunicación Científica",
+    # Liderazgo IA
     "/Lideratge-entorns-IA": "Liderazgo IA",
+    "/lideratge-ia-uvic": "Liderazgo IA",
+    "/esp-liderazgo-ia": "Liderazgo IA",
 }
 LANDINGS = list(LANDING_PROGRAMA.keys())
 
