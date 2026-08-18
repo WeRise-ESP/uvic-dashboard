@@ -88,6 +88,8 @@ detalle = df.groupby(["programa", "landing"], as_index=False).agg(
     duracion_media=("duracion_media", "mean"),
 ).sort_values("sesiones", ascending=False)
 detalle["rebote"] = (detalle["rebote"] * 100).round(1)  # ratio -> %
+# Ruta clickable → URL completa de la landing (se abre en otra pestaña).
+detalle["landing"] = config.LANDING_BASE_URL + detalle["landing"]
 ui.tabla_totales(
     detalle,
     columnas=["programa", "landing", "sesiones", "usuarios", "vistas", "rebote", "duracion_media"],
@@ -95,7 +97,8 @@ ui.tabla_totales(
     weighted=["rebote", "duracion_media"], weight_col="sesiones",
     column_config={
         "programa": "Programa",
-        "landing": "Landing (ruta)",
+        "landing": st.column_config.LinkColumn(
+            "Landing (ruta)", display_text=r"https://cloud\.info-uvic\.cat(/.*)"),
         "sesiones": st.column_config.NumberColumn("Sesiones", format="%d"),
         "usuarios": st.column_config.NumberColumn("Usuarios", format="%d"),
         "vistas": st.column_config.NumberColumn("Páginas vistas", format="%d"),
@@ -104,8 +107,8 @@ ui.tabla_totales(
     },
 )
 st.caption(
-    "Solo tráfico de las 5 landings de programa en `cloud.info-uvic.cat`. "
-    "Los leads/conversiones se miden en HubSpot (página *Leads*)."
+    "Solo tráfico de las landings de programa en `cloud.info-uvic.cat` (haz clic en la ruta para "
+    "abrir la landing). Los leads/conversiones se miden en HubSpot (página *Leads*)."
 )
 
 st.divider()

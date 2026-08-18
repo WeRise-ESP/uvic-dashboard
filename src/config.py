@@ -273,6 +273,9 @@ LANDING_PROGRAMA = {
 }
 LANDINGS = list(LANDING_PROGRAMA.keys())
 
+# Dominio donde viven las landings (para enlazarlas desde el dashboard).
+LANDING_BASE_URL = "https://cloud.info-uvic.cat"
+
 # Fuentes de prueba/test a EXCLUIR del tráfico y eventos de GA4 (no son reales).
 GA4_FUENTES_EXCLUIR = ["pixel-doctor", "metaCLAUDETEST"]
 
