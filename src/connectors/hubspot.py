@@ -35,6 +35,16 @@ from src.data import sample_data
 
 API = "https://api.hubapi.com"
 
+# Resultados de llamada por defecto de HubSpot (fallback si falla el endpoint).
+_DISPOSICIONES_DEFAULT = {
+    "9d9162e7-6cf3-4944-bf63-4dff82258764": "Ocupado",
+    "f240bbac-87c9-4f6e-bf70-924b57d47db7": "Conectado",
+    "a4c4c377-d246-4b32-a13b-75a56a4cd0ff": "Dejó mensaje en directo",
+    "b2cf5968-551e-4856-9783-52b3da59a7d0": "Buzón de voz",
+    "73a0d17f-1163-4015-bdd5-ec830791da20": "Sin respuesta",
+    "17b47fee-58de-441e-a44c-c6300d46f273": "Número incorrecto",
+}
+
 # Mapeo de lifecyclestage de contacto -> etiqueta de estado del lead.
 MAPA_LIFECYCLE = {
     "subscriber": "Suscriptor", "lead": "Lead", "marketingqualifiedlead": "MQL",
@@ -471,3 +481,147 @@ def _negocios_de_contactos(token: str, contact_ids: list, mapa: dict) -> pd.Data
             fecha_creacion=_a_fecha(p.get("createdate")),
         ))
     return pd.DataFrame(filas)
+
+
+# --------------------------------------------------------------------------- #
+# INFORME DE ACTIVIDAD — leads UVIC (uvic_curso, comercial Vanina) y su gestión
+# (intentos de contacto, llamadas, emails, reuniones, tareas). Todo scoped a UVIC.
+# --------------------------------------------------------------------------- #
+def _disposiciones(token: str) -> dict:
+    """Mapa id->etiqueta de resultados de llamada del portal (o el estándar)."""
+    import requests
+    try:
+        r = requests.get(f"{API}/calling/v1/dispositions",
+                         headers=_headers(token), timeout=30)
+        if r.status_code == 200:
+            m = {d.get("id"): d.get("label") for d in r.json() if d.get("id")}
+            if m:
+                return m
+    except Exception:  # noqa: BLE001
+        pass
+    return dict(_DISPOSICIONES_DEFAULT)
+
+
+def _asociadas(token: str, ids: list, tipo: str) -> set:
+    """IDs de actividades de `tipo` (calls/emails/…) asociadas a esos contactos."""
+    import requests
+    got = set()
+    for i in range(0, len(ids), 100):
+        try:
+            r = requests.post(f"{API}/crm/v4/associations/contact/{tipo}/batch/read",
+                              headers=_headers(token),
+                              json={"inputs": [{"id": c} for c in ids[i:i + 100]]}, timeout=60)
+            if r.status_code not in (200, 207):
+                continue
+            for it in r.json().get("results", []):
+                for t in it.get("to", []):
+                    got.add(str(t.get("toObjectId")))
+        except Exception:  # noqa: BLE001
+            continue
+    return got
+
+
+def actividad_uvic():
+    """Devuelve (estructura, origen). estructura = dict con la actividad de los
+    leads UVIC (contacto=uvic_curso + owner Vanina, sin IMPORT/webinar):
+    df de leads, resumen de intentos, conteo de actividades y detalle de llamadas."""
+    from datetime import date, datetime, timezone
+
+    import requests
+
+    creds = _leer_secreto("hubspot")
+    if not (creds and creds.get("access_token")):
+        return None, "sample"
+    token = creds["access_token"]
+
+    # 1) Contactos UVIC de Vanina (sin IMPORT/webinar) con propiedades de actividad.
+    props = ["firstname", "lastname", "email", "uvic_curso", "num_contacted_notes",
+             "num_notes", "notes_last_contacted", "hs_lead_status", "hs_object_source",
+             "uvic_utm_campaign", "uvic_utm_source", "uvic_utm_medium"]
+    payload = {
+        "filterGroups": [{"filters": [
+            {"propertyName": "uvic_curso", "operator": "HAS_PROPERTY"},
+            {"propertyName": "hubspot_owner_id", "operator": "EQ", "value": config.HUBSPOT_OWNER_UVIC},
+        ]}],
+        "properties": props, "limit": 100,
+    }
+    ids, filas, after = [], [], None
+    hoy = date.today()
+    try:
+        while True:
+            if after:
+                payload["after"] = after
+            r = requests.post(f"{API}/crm/v3/objects/contacts/search",
+                              headers=_headers(token), json=payload, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            for c in data.get("results", []):
+                p = c.get("properties", {})
+                if p.get("hs_object_source") == "IMPORT":
+                    continue
+                if config.excluir_webinar(p.get("uvic_utm_campaign"),
+                                          p.get("uvic_utm_source"), p.get("uvic_utm_medium")):
+                    continue
+                ids.append(c["id"])
+                ult = _a_fecha(p.get("notes_last_contacted"))
+                dias = (hoy - ult).days if ult else None
+                nombre = f"{p.get('firstname','') or ''} {p.get('lastname','') or ''}".strip()
+                filas.append(dict(
+                    nombre=nombre or (p.get("email") or "—"),
+                    email=p.get("email") or "",
+                    programa=config.programa_por_curso(p.get("uvic_curso") or ""),
+                    intentos=int(p.get("num_contacted_notes") or 0),
+                    actividades=int(p.get("num_notes") or 0),
+                    ult_contacto=ult,
+                    dias_sin_contacto=dias,
+                    estado=p.get("hs_lead_status") or "Sin estado",
+                ))
+            after = data.get("paging", {}).get("next", {}).get("after")
+            if not after:
+                break
+    except Exception as e:  # noqa: BLE001
+        return None, f"error ({e})"
+
+    leads = pd.DataFrame(filas)
+
+    # 2) Actividades asociadas a esos contactos (scoped a UVIC).
+    act = {t: len(_asociadas(token, ids, t)) for t in ("emails", "meetings", "tasks")}
+    call_ids = list(_asociadas(token, ids, "calls"))
+
+    # 3) Detalle de llamadas: resultado (disposition) y duración.
+    disp = _disposiciones(token)
+    por_res, dur = {}, []
+    for i in range(0, len(call_ids), 100):
+        try:
+            r = requests.post(f"{API}/crm/v3/objects/calls/batch/read",
+                              headers=_headers(token),
+                              json={"properties": ["hs_call_disposition", "hs_call_duration"],
+                                    "inputs": [{"id": c} for c in call_ids[i:i + 100]]}, timeout=60)
+            for x in r.json().get("results", []):
+                pp = x.get("properties", {})
+                lbl = disp.get(pp.get("hs_call_disposition"), "Sin resultado")
+                por_res[lbl] = por_res.get(lbl, 0) + 1
+                d = pp.get("hs_call_duration")
+                if d and int(d) > 0:
+                    dur.append(int(d) / 1000)
+        except Exception:  # noqa: BLE001
+            continue
+
+    n = len(leads)
+    intentos = leads["intentos"] if n else pd.Series(dtype=int)
+    conect = por_res.get("Conectado", 0)
+    estruct = dict(
+        leads=leads,
+        n_leads=n,
+        intentos_total=int(intentos.sum()) if n else 0,
+        media_intentos=float(intentos.mean()) if n else 0.0,
+        max_intentos=int(intentos.max()) if n else 0,
+        sin_contactar=int((intentos == 0).sum()) if n else 0,
+        sin_contacto_7d=int(leads["dias_sin_contacto"].fillna(999).ge(7).sum()) if n else 0,
+        actividades=dict(calls=len(call_ids), **act),
+        llamadas=dict(total=len(call_ids), conectadas=conect,
+                      tasa=(conect / len(call_ids)) if call_ids else 0.0,
+                      dur_media=(sum(dur) / len(dur)) if dur else 0.0,
+                      por_resultado=por_res),
+    )
+    return estruct, "api"

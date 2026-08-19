@@ -76,6 +76,13 @@ def _cargar_importados():
     return leads_i, negocios_i, origen_i
 
 
+@st.cache_data(ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando actividad comercial…")
+def cargar_actividad():
+    """Informe de actividad de leads UVIC (llamadas, emails, intentos de contacto).
+    Devuelve (estructura, origen)."""
+    return hubspot.actividad_uvic()
+
+
 @st.cache_data(ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando planificación…")
 def cargar_plan():
     """Planificación trimestral (Google Sheet en vivo). Devuelve
