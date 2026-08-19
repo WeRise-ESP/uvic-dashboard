@@ -308,6 +308,10 @@ HUBSPOT_ETAPAS_UVIC = [
 ]
 HUBSPOT_ETAPA_PERDIDO = ("5604424921", "Cierre perdido")
 HUBSPOT_ETAPAS_MAP = dict(HUBSPOT_ETAPAS_UVIC + [HUBSPOT_ETAPA_PERDIDO])
+# Orden completo del pipeline (incluye Cierre perdido) para la vista de tablero.
+HUBSPOT_ETAPAS_TODAS = [e for _, e in HUBSPOT_ETAPAS_UVIC] + [HUBSPOT_ETAPA_PERDIDO[1]]
+# Propiedad de deal con el motivo de pérdida (enum "Motivo de cierre perdido").
+HUBSPOT_PROP_MOTIVO_PERDIDO = "motivo_de_cierre_perdido"
 
 
 # --------------------------------------------------------------------------- #

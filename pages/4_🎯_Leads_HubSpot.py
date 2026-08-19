@@ -7,6 +7,7 @@ from src import config
 from src.data import loader, metrics
 from src.ui import components as ui
 from src.ui.theme import aplicar_tema, eur, num, pct
+from src.config import TEMA
 
 st.set_page_config(page_title="Leads · HubSpot", page_icon="🎯", layout="wide")
 aplicar_tema()
@@ -102,6 +103,88 @@ if not te.empty:
             "conv_paso": st.column_config.NumberColumn("Conv. desde anterior", format="%.1f%%"),
         },
     )
+
+st.divider()
+
+# --------------------------------------------------------------------------- #
+# Pipeline de ventas — reparto por etapa ACTUAL (vista de tablero HubSpot)
+# --------------------------------------------------------------------------- #
+st.subheader("Pipeline de ventas · Pipeline UVIC")
+st.caption(
+    "Dónde está **ahora** cada negocio del *Pipeline UVIC*. A diferencia del embudo "
+    "(acumulado), aquí cada deal cuenta en su etapa actual e incluye los cierres "
+    "ganados y perdidos."
+)
+pipe_et = metrics.pipeline_por_etapa(deals)
+if pipe_et.empty:
+    st.info("Sin negocios en el pipeline para este periodo.")
+else:
+    _hay_importe = float(pipe_et["importe"].sum()) > 0
+    cols_et = st.columns(len(pipe_et))
+    for c, (_, r) in zip(cols_et, pipe_et.iterrows()):
+        est = ("ok" if r["etapa"] == "Cierre ganado"
+               else "off" if r["etapa"] == "Cierre perdido" else None)
+        sub = pct(r["pct"], 1) + (f" · {eur(r['importe'], 0)}" if _hay_importe else "")
+        ui.kpi(c, r["etapa"], num(r["deals"], 0), sub, estado=est)
+
+    st.write("")
+    _COL_ETAPA = {"Cierre ganado": TEMA.verde_ok, "Cierre perdido": TEMA.rojo_off}
+    graf = pipe_et.copy()
+    graf["txt"] = graf["deals"].apply(lambda v: num(v, 0))
+    ui.barras_horizontales(
+        graf, "etapa", "deals", texto_col="txt",
+        colores=[_COL_ETAPA.get(e, TEMA.primario) for e in graf["etapa"]],
+        x_label="Negocios")
+
+    tp = pipe_et.copy()
+    tp["pct"] = (tp["pct"] * 100).round(1)
+    _cols = ["etapa", "deals", "pct"] + (["importe"] if _hay_importe else [])
+    _cfg = {
+        "etapa": "Etapa",
+        "deals": st.column_config.NumberColumn("Negocios", format="%d"),
+        "pct": st.column_config.NumberColumn("% del pipeline", format="%.1f%%"),
+        "importe": st.column_config.NumberColumn("Importe", format="%.0f €"),
+    }
+    ui.tabla_totales(tp, columnas=_cols,
+                     sum_cols=["deals"] + (["importe"] if _hay_importe else []),
+                     column_config=_cfg)
+
+st.divider()
+
+# --------------------------------------------------------------------------- #
+# Motivos de cierre perdido
+# --------------------------------------------------------------------------- #
+st.subheader("Motivos de cierre perdido")
+mot = metrics.motivos_perdida_detalle(deals)
+if mot.empty:
+    st.info("No hay negocios en 'Cierre perdido' en este periodo.")
+else:
+    n_perd = int(mot["deals"].sum())
+    st.caption(
+        f"Los **{num(n_perd)} negocios perdidos** del periodo, por su *Motivo de cierre "
+        f"perdido* (HubSpot). El importe es el valor que se quedó por el camino."
+    )
+    c_izq, c_der = st.columns([0.45, 0.55])
+    with c_izq:
+        graf_mot = mot.copy()
+        graf_mot["txt"] = graf_mot["deals"].apply(lambda v: num(v, 0))
+        ui.barras_horizontales(graf_mot, "motivo", "deals", texto_col="txt",
+                               x_label="Negocios perdidos")
+    with c_der:
+        tm = mot.copy()
+        tm["pct"] = (tm["pct"] * 100).round(1)
+        _hay_imp_m = float(mot["importe"].sum()) > 0
+        _cols_m = ["motivo", "deals", "pct"] + (["importe"] if _hay_imp_m else [])
+        ui.tabla_totales(
+            tm, columnas=_cols_m,
+            sum_cols=["deals"] + (["importe"] if _hay_imp_m else []),
+            column_config={
+                "motivo": "Motivo",
+                "deals": st.column_config.NumberColumn("Negocios", format="%d"),
+                "pct": st.column_config.NumberColumn("%", format="%.1f%%"),
+                "importe": st.column_config.NumberColumn("Importe", format="%.0f €"),
+            },
+        )
 
 st.divider()
 

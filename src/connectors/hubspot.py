@@ -188,7 +188,8 @@ def _fetch_deals(creds: dict, desde, hasta) -> pd.DataFrame:
                 {"propertyName": "createdate", "operator": "LTE", "value": str(fin_ms)},
             ]
         }],
-        "properties": ["dealstage", "amount", "createdate", "closedate", "dealname"],
+        "properties": ["dealstage", "amount", "createdate", "closedate", "dealname",
+                       config.HUBSPOT_PROP_MOTIVO_PERDIDO],
         "limit": 100,
     }
     deals, after = [], None
@@ -216,6 +217,8 @@ def _fetch_deals(creds: dict, desde, hasta) -> pd.DataFrame:
             continue
         p = d.get("properties", {})
         etapa_id = p.get("dealstage") or ""
+        es_perdido = (etapa_id == config.HUBSPOT_ETAPA_PERDIDO[0])
+        motivo = (p.get(config.HUBSPOT_PROP_MOTIVO_PERDIDO) or "").strip()
         filas.append(dict(
             deal_id=d.get("id"),
             fecha_creacion=_a_fecha(p.get("createdate")),
@@ -226,6 +229,8 @@ def _fetch_deals(creds: dict, desde, hasta) -> pd.DataFrame:
             fuente=info.get("fuente", "Sin UTM"),
             amount=float(p.get("amount") or 0),
             es_ganado=(etapa_id == config.HUBSPOT_STAGE_MATRICULA),
+            es_perdido=es_perdido,
+            motivo_perdido=(motivo or "Sin motivo indicado") if es_perdido else "",
         ))
     return pd.DataFrame(filas)
 

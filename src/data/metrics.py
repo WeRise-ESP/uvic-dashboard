@@ -221,6 +221,48 @@ def tendencia(df: pd.DataFrame, valor_col: str, fecha_col: str = "fecha") -> dic
 # --------------------------------------------------------------------------- #
 # Tasas de conversión entre etapas del embudo
 # --------------------------------------------------------------------------- #
+def pipeline_por_etapa(df_deals: pd.DataFrame) -> pd.DataFrame:
+    """Deals que están AHORA en cada etapa del Pipeline UVIC (vista de tablero).
+
+    A diferencia de `embudo` (acumulado y sin perdidos), reparte cada deal en su
+    etapa ACTUAL e incluye 'Cierre ganado' y 'Cierre perdido'. Devuelve
+    [etapa, deals, importe, pct] en el orden del pipeline."""
+    cols = ["etapa", "deals", "importe", "pct"]
+    if df_deals is None or df_deals.empty or "etapa" not in df_deals:
+        return pd.DataFrame(columns=cols)
+    g = df_deals.groupby("etapa").agg(deals=("deal_id", "count"), importe=("amount", "sum"))
+    total = int(g["deals"].sum()) or 1
+    filas = []
+    for etapa in config.HUBSPOT_ETAPAS_TODAS:
+        n = int(g["deals"].get(etapa, 0))
+        filas.append(dict(etapa=etapa, deals=n,
+                          importe=float(g["importe"].get(etapa, 0.0)),
+                          pct=_safe_div(n, total)))
+    # Etapas fuera del orden conocido (por si HubSpot añade alguna nueva).
+    for etapa, r in g.iterrows():
+        if etapa not in config.HUBSPOT_ETAPAS_TODAS:
+            filas.append(dict(etapa=etapa, deals=int(r["deals"]),
+                              importe=float(r["importe"]),
+                              pct=_safe_div(int(r["deals"]), total)))
+    return pd.DataFrame(filas, columns=cols)
+
+
+def motivos_perdida_detalle(df_deals: pd.DataFrame) -> pd.DataFrame:
+    """Motivos de cierre perdido con nº de deals, % sobre perdidos e importe."""
+    cols = ["motivo", "deals", "pct", "importe"]
+    if df_deals is None or df_deals.empty or "es_perdido" not in df_deals:
+        return pd.DataFrame(columns=cols)
+    perdidos = df_deals[df_deals["es_perdido"] == True]  # noqa: E712
+    if perdidos.empty or "motivo_perdido" not in perdidos:
+        return pd.DataFrame(columns=cols)
+    g = perdidos.groupby("motivo_perdido", as_index=False).agg(
+        deals=("deal_id", "count"), importe=("amount", "sum"))
+    g = g.rename(columns={"motivo_perdido": "motivo"})
+    total = int(g["deals"].sum()) or 1
+    g["pct"] = g["deals"] / total
+    return g.sort_values("deals", ascending=False)[cols].reset_index(drop=True)
+
+
 def tasas_embudo(df_deals: pd.DataFrame) -> pd.DataFrame:
     """Embudo con la tasa de paso desde la etapa anterior (conv_paso)."""
     e = embudo(df_deals)
