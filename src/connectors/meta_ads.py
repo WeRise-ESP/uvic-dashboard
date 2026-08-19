@@ -22,6 +22,34 @@ from src.connectors.base import (
 )
 from src.data import sample_data
 
+# Códigos de error TRANSITORIOS de Meta (reintentar, no fallar): 1 desconocido,
+# 2 "Service temporarily unavailable", 4/17/613 rate limit, 341 límite de app.
+_META_TRANSITORIOS = {1, 2, 4, 17, 341, 613}
+
+
+def _get_meta(url, params, timeout=60, intentos=3):
+    """GET a la Graph API con reintentos ante errores transitorios de Meta
+    (código 2, rate limits, 5xx). Un error real (p.ej. 190 token) corta enseguida."""
+    import time
+
+    import requests
+
+    resp = None
+    for i in range(intentos):
+        resp = requests.get(url, params=params, timeout=timeout)
+        if resp.status_code == 200:
+            return resp
+        try:
+            cod = resp.json().get("error", {}).get("code")
+        except Exception:  # noqa: BLE001
+            cod = None
+        if (resp.status_code >= 500 or cod in _META_TRANSITORIOS) and i < intentos - 1:
+            time.sleep(2 * (i + 1))  # backoff 2s, 4s
+            continue
+        break
+    resp.raise_for_status()
+    return resp
+
 
 def obtener(desde, hasta) -> ResultadoConector:
     creds = _leer_secreto("meta_ads")
@@ -50,8 +78,7 @@ def obtener(desde, hasta) -> ResultadoConector:
 def _consultar_api(creds: dict, desde, hasta) -> pd.DataFrame:
     """Insights diarios por campaña vía Graph API (con requests, sin SDK)."""
     import json
-
-    import requests
+    from datetime import timedelta
 
     version = creds.get("api_version", "v21.0")
     account = creds.get("ad_account_id", config.META_AD_ACCOUNT_ID)
@@ -60,55 +87,61 @@ def _consultar_api(creds: dict, desde, hasta) -> pd.DataFrame:
     # Estado (effective_status) de todas las campañas → mapa nombre→estado legible.
     estados = {}
     try:
-        rc = requests.get(
+        rc = _get_meta(
             f"https://graph.facebook.com/{version}/{account}/campaigns",
-            params={"fields": "name,effective_status", "limit": 500, "access_token": token},
-            timeout=60)
+            {"fields": "name,effective_status", "limit": 500, "access_token": token})
         for cp in rc.json().get("data", []):
             estados[cp.get("name", "")] = config.estado_legible(cp.get("effective_status"))
     except Exception:  # noqa: BLE001
         pass
 
-    url = f"https://graph.facebook.com/{version}/{account}/insights"
-    params = {
-        "level": "campaign",
-        "fields": "campaign_name,impressions,clicks,spend,actions",
-        "time_increment": 1,
-        "time_range": json.dumps({"since": str(desde), "until": str(hasta)}),
-        "access_token": token,
-        "limit": 500,
-    }
+    url_base = f"https://graph.facebook.com/{version}/{account}/insights"
     filas = []
     con_datos = set()
-    while url:
-        resp = requests.get(url, params=params, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        for row in data.get("data", []):
-            nombre = row.get("campaign_name", "")
-            if not config.es_campana_werise(nombre):
-                continue  # acotamos al scope WeRise (cualquier campaña 'WeRise…')
-            con_datos.add(nombre)
-            # OJO: Meta reporta el MISMO lead bajo dos action_type ("lead" y
-            # "offsite_conversion.fb_pixel_lead"). Sumarlos duplica → tomamos el máximo.
-            vals = [
-                int(float(a.get("value", 0)))
-                for a in row.get("actions", [])
-                if a.get("action_type") in ("lead", "offsite_conversion.fb_pixel_lead")
-            ]
-            leads = max(vals) if vals else 0
-            filas.append(dict(
-                fecha=pd.to_datetime(row["date_start"]).date(),
-                plataforma="Meta Ads",
-                campana=nombre,
-                estado=estados.get(nombre, "Otra"),
-                impresiones=int(row.get("impressions", 0)),
-                clics=int(row.get("clicks", 0)),
-                coste=round(float(row.get("spend", 0)), 2),
-                conversiones=leads,
-            ))
-        url = data.get("paging", {}).get("next")
-        params = None  # la URL 'next' ya trae los parámetros
+    # Trocear el rango en ventanas de 7 días: Meta rechaza la consulta diaria de
+    # rangos largos (error 1/2 'Service temporarily unavailable') pero acepta bien
+    # las cortas. Se piden por tramos y se unen los resultados.
+    ini = desde
+    while ini <= hasta:
+        fin = min(ini + timedelta(days=6), hasta)
+        url = url_base
+        params = {
+            "level": "campaign",
+            "fields": "campaign_name,impressions,clicks,spend,actions",
+            "time_increment": 1,
+            "time_range": json.dumps({"since": str(ini), "until": str(fin)}),
+            "access_token": token,
+            "limit": 500,
+        }
+        while url:
+            resp = _get_meta(url, params)
+            data = resp.json()
+            for row in data.get("data", []):
+                nombre = row.get("campaign_name", "")
+                if not config.es_campana_werise(nombre):
+                    continue  # acotamos al scope WeRise (cualquier campaña 'WeRise…')
+                con_datos.add(nombre)
+                # OJO: Meta reporta el MISMO lead bajo dos action_type ("lead" y
+                # "offsite_conversion.fb_pixel_lead"). Sumarlos duplica → tomamos el máximo.
+                vals = [
+                    int(float(a.get("value", 0)))
+                    for a in row.get("actions", [])
+                    if a.get("action_type") in ("lead", "offsite_conversion.fb_pixel_lead")
+                ]
+                leads = max(vals) if vals else 0
+                filas.append(dict(
+                    fecha=pd.to_datetime(row["date_start"]).date(),
+                    plataforma="Meta Ads",
+                    campana=nombre,
+                    estado=estados.get(nombre, "Otra"),
+                    impresiones=int(row.get("impressions", 0)),
+                    clics=int(row.get("clicks", 0)),
+                    coste=round(float(row.get("spend", 0)), 2),
+                    conversiones=leads,
+                ))
+            url = data.get("paging", {}).get("next")
+            params = None  # la URL 'next' ya trae los parámetros
+        ini = fin + timedelta(days=1)
 
     # Incluir TODAS las campañas WeRise (aunque estén pausadas o sin gasto en el
     # periodo) con una fila a cero, para que siempre se muestren en el dashboard.
