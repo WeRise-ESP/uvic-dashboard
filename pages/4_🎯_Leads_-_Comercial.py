@@ -1,4 +1,4 @@
-"""Página: Leads (HubSpot) — leads UVic por programa, CPL, embudo y tasas de conversión."""
+"""Página: Leads - Comercial — leads UVic por programa, CPL, embudo, pipeline y tasas."""
 from __future__ import annotations
 
 import streamlit as st
@@ -9,14 +9,14 @@ from src.ui import components as ui
 from src.ui.theme import aplicar_tema, eur, num, pct
 from src.config import TEMA
 
-st.set_page_config(page_title="Leads · HubSpot", page_icon="🎯", layout="wide")
+st.set_page_config(page_title="Leads - Comercial", page_icon="🎯", layout="wide")
 aplicar_tema()
 
 desde, hasta, etiqueta = ui.selector_periodo()
 datos = loader.cargar_todo(desde, hasta)
 ui.aviso_origenes(datos.origenes, datos.detalles)
 
-ui.cabecera("Leads · HubSpot", f"Rise Education · leads UVic por programa · {etiqueta}")
+ui.cabecera("Leads - Comercial", f"Rise Education · leads UVic por programa · {etiqueta}")
 
 leads = datos.leads
 deals = datos.deals

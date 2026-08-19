@@ -13,15 +13,40 @@ from src.config import COLOR_PLATAFORMA, TEMA
 from src.ui.theme import badge_origen, eur, num, pct
 
 
+import base64 as _base64
+import functools as _functools
+from pathlib import Path as _Path
+
+
+@_functools.lru_cache(maxsize=1)
+def _logo_uvic_datauri() -> str:
+    """Logo UVic (granate) del repo como data URI, o '' si no está."""
+    p = _Path(__file__).resolve().parents[2] / "assets" / "logo-uvic.png"
+    if not p.exists():
+        return ""
+    b64 = _base64.b64encode(p.read_bytes()).decode()
+    return f"data:image/png;base64,{b64}"
+
+
 def cabecera(titulo: str, subtitulo: str = "") -> None:
-    col1, col2 = st.columns([0.8, 0.2])
+    col1, col2 = st.columns([0.72, 0.28])
     with col1:
         st.title(titulo)
         if subtitulo:
             st.caption(subtitulo)
     with col2:
-        st.caption("UVic · WeRise")
-        st.caption("Dashboard de marketing")
+        uri = _logo_uvic_datauri()
+        if uri:
+            st.markdown(
+                f'<div style="text-align:right;margin-top:.9rem;">'
+                f'<img src="{uri}" alt="UVic" style="width:210px;max-width:100%;height:auto;"></div>'
+                '<div style="text-align:right;color:#888;font-size:.72rem;margin-top:.2rem;'
+                'text-transform:uppercase;letter-spacing:.04em;">Dashboard de marketing · WeRise</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("UVic · WeRise")
+            st.caption("Dashboard de marketing")
 
 
 def selector_periodo(default: str = "Este mes"):
