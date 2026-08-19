@@ -71,7 +71,7 @@ def obtener_deals(desde, hasta) -> ResultadoConector:
     creds = _leer_secreto("hubspot")
     if creds and creds.get("access_token"):
         try:
-            df = _fetch_deals(creds)
+            df = _fetch_deals(creds, desde, hasta)
             if df is not None:
                 if not df.empty:
                     guardar_cache(df, "hubspot_deals")
@@ -171,18 +171,24 @@ def _fetch_leads(creds: dict, desde, hasta) -> pd.DataFrame:
     return pd.DataFrame(filas)
 
 
-def _fetch_deals(creds: dict) -> pd.DataFrame:
+def _fetch_deals(creds: dict, desde, hasta) -> pd.DataFrame:
     """Deals del Pipeline UVIC + programa (vía contacto asociado y su uvic_curso).
-    Sin filtro de fecha: el pipeline completo es el estado vivo del embudo."""
+    Filtrado por fecha de creación dentro del periodo, igual que los leads, para que
+    oportunidades, embudo y matrículas respeten el filtro de fechas del dashboard."""
     import requests
 
     token = creds["access_token"]
+    ini_ms, fin_ms = _rango_ms(desde, hasta)
     payload = {
         "filterGroups": [{
-            "filters": [{"propertyName": "pipeline", "operator": "EQ",
-                         "value": config.HUBSPOT_PIPELINE_UVIC}]
+            "filters": [
+                {"propertyName": "pipeline", "operator": "EQ",
+                 "value": config.HUBSPOT_PIPELINE_UVIC},
+                {"propertyName": "createdate", "operator": "GTE", "value": str(ini_ms)},
+                {"propertyName": "createdate", "operator": "LTE", "value": str(fin_ms)},
+            ]
         }],
-        "properties": ["dealstage", "amount", "createdate", "dealname"],
+        "properties": ["dealstage", "amount", "createdate", "closedate", "dealname"],
         "limit": 100,
     }
     deals, after = [], None
@@ -213,6 +219,7 @@ def _fetch_deals(creds: dict) -> pd.DataFrame:
         filas.append(dict(
             deal_id=d.get("id"),
             fecha_creacion=_a_fecha(p.get("createdate")),
+            fecha_cierre=_a_fecha(p.get("closedate")),
             etapa_id=etapa_id,
             etapa=config.HUBSPOT_ETAPAS_MAP.get(etapa_id, etapa_id),
             programa=info.get("programa", "Sin asignar"),
