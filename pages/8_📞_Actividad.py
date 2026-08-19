@@ -142,7 +142,35 @@ else:
 st.divider()
 
 # --------------------------------------------------------------------------- #
-# Fila E — Detalle por lead (todos, ordenable)
+# Fila E — Contactados solo 1 vez y abandonados
+# --------------------------------------------------------------------------- #
+una = leads[leads["intentos"] == 1].copy()
+st.subheader(f"Contactados solo 1 vez ({num(len(una))})")
+st.caption("Leads con **un único intento de contacto** y sin más gestión. Candidatos claros "
+           "a retomar: se tocaron una vez y se abandonaron.")
+if una.empty:
+    st.success("No hay leads con un solo intento sin seguimiento. 👍")
+else:
+    una["_orden"] = una["dias_sin_contacto"].fillna(9999)
+    una = una.sort_values("_orden", ascending=False)
+    una["ult_contacto"] = una["ult_contacto"].astype(str).replace("None", "Nunca")
+    una["dias_txt"] = una["dias_sin_contacto"].apply(
+        lambda v: "Nunca" if pd.isna(v) else f"{int(v)} días")
+    st.dataframe(
+        una[["nombre", "programa", "actividades", "ult_contacto", "dias_txt", "estado"]],
+        width="stretch", hide_index=True,
+        column_config={
+            "nombre": "Lead", "programa": "Programa",
+            "actividades": st.column_config.NumberColumn("Actividades", format="%d"),
+            "ult_contacto": "Único contacto", "dias_txt": "Hace",
+            "estado": "Estado",
+        },
+    )
+
+st.divider()
+
+# --------------------------------------------------------------------------- #
+# Fila F — Detalle por lead (todos, ordenable)
 # --------------------------------------------------------------------------- #
 st.subheader(f"Detalle por lead ({num(est['n_leads'])})")
 st.caption("Intentos de contacto y actividad de **cada** lead. Ordena pinchando en la "
