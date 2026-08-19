@@ -142,7 +142,34 @@ else:
 st.divider()
 
 # --------------------------------------------------------------------------- #
-# Fila E — Actividad por programa
+# Fila E — Detalle por lead (todos, ordenable)
+# --------------------------------------------------------------------------- #
+st.subheader(f"Detalle por lead ({num(est['n_leads'])})")
+st.caption("Intentos de contacto y actividad de **cada** lead. Ordena pinchando en la "
+           "cabecera de cualquier columna (por defecto, de más a menos trabajado).")
+progs = sorted(leads["programa"].dropna().unique())
+sel_p = st.multiselect("Filtrar por programa", progs, placeholder="Todos los programas")
+det = leads[leads["programa"].isin(sel_p)] if sel_p else leads
+det = det.sort_values("intentos", ascending=False).copy()
+det["ult_contacto"] = det["ult_contacto"].astype(str).replace("None", "Nunca")
+det["dias_txt"] = det["dias_sin_contacto"].apply(
+    lambda v: "Nunca" if pd.isna(v) else f"{int(v)} días")
+st.dataframe(
+    det[["nombre", "programa", "intentos", "actividades", "ult_contacto", "dias_txt", "estado"]],
+    width="stretch", hide_index=True,
+    column_config={
+        "nombre": "Lead", "programa": "Programa",
+        "intentos": st.column_config.NumberColumn("Intentos de contacto", format="%d"),
+        "actividades": st.column_config.NumberColumn("Actividades", format="%d"),
+        "ult_contacto": "Último contacto", "dias_txt": "Sin contacto",
+        "estado": "Estado",
+    },
+)
+
+st.divider()
+
+# --------------------------------------------------------------------------- #
+# Fila F — Actividad por programa
 # --------------------------------------------------------------------------- #
 st.subheader("Actividad por programa")
 prog = leads.groupby("programa", as_index=False).agg(
