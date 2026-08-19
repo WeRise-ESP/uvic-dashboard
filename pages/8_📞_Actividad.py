@@ -98,6 +98,13 @@ with col_izq:
 
 with col_der:
     st.subheader("Distribución de intentos de contacto")
+    # Resumen por nº exacto de intentos (0,1,2,3,4,5+).
+    _v = leads["intentos"]
+    _resumen = {"0": int((_v == 0).sum()), "1": int((_v == 1).sum()),
+                "2": int((_v == 2).sum()), "3": int((_v == 3).sum()),
+                "4": int((_v == 4).sum()), "5+": int((_v >= 5).sum())}
+    st.dataframe(pd.DataFrame(_resumen, index=["Leads"]), width="stretch",
+                 column_config={k: st.column_config.NumberColumn(k, format="%d") for k in _resumen})
     bandas = [("0 (sin contactar)", (leads["intentos"] == 0).sum()),
               ("1-2", leads["intentos"].between(1, 2).sum()),
               ("3-5", leads["intentos"].between(3, 5).sum()),
