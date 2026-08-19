@@ -173,21 +173,27 @@ def _fetch_leads(creds: dict, desde, hasta) -> pd.DataFrame:
 
 def _fetch_deals(creds: dict, desde, hasta) -> pd.DataFrame:
     """Deals del Pipeline UVIC + programa (vía contacto asociado y su uvic_curso).
-    Filtrado por fecha de creación dentro del periodo, igual que los leads, para que
-    oportunidades, embudo y matrículas respeten el filtro de fechas del dashboard."""
+
+    Un negocio pertenece al periodo por su fecha relevante: los **cerrados**
+    (ganado/perdido) por su **fecha de cierre**; los **abiertos** por su **fecha de
+    creación**. Así matrículas y cierres perdidos se cuentan cuando ocurrieron y las
+    oportunidades abiertas cuando entraron. Se pide el superset (creado O cerrado en
+    el periodo) y luego se afina en Python."""
     import requests
 
     token = creds["access_token"]
     ini_ms, fin_ms = _rango_ms(desde, hasta)
+    _pipe = {"propertyName": "pipeline", "operator": "EQ", "value": config.HUBSPOT_PIPELINE_UVIC}
     payload = {
-        "filterGroups": [{
-            "filters": [
-                {"propertyName": "pipeline", "operator": "EQ",
-                 "value": config.HUBSPOT_PIPELINE_UVIC},
-                {"propertyName": "createdate", "operator": "GTE", "value": str(ini_ms)},
-                {"propertyName": "createdate", "operator": "LTE", "value": str(fin_ms)},
-            ]
-        }],
+        # OR: creado en el periodo  O  cerrado en el periodo.
+        "filterGroups": [
+            {"filters": [_pipe,
+                         {"propertyName": "createdate", "operator": "GTE", "value": str(ini_ms)},
+                         {"propertyName": "createdate", "operator": "LTE", "value": str(fin_ms)}]},
+            {"filters": [_pipe,
+                         {"propertyName": "closedate", "operator": "GTE", "value": str(ini_ms)},
+                         {"propertyName": "closedate", "operator": "LTE", "value": str(fin_ms)}]},
+        ],
         "properties": ["dealstage", "amount", "createdate", "closedate", "dealname",
                        config.HUBSPOT_PROP_MOTIVO_PERDIDO],
         "limit": 100,
@@ -209,20 +215,35 @@ def _fetch_deals(creds: dict, desde, hasta) -> pd.DataFrame:
     deal_ids = [d["id"] for d in deals]
     info_por_deal = _programa_por_deal(token, deal_ids) if deal_ids else {}
 
+    _cerradas = (config.HUBSPOT_STAGE_MATRICULA, config.HUBSPOT_ETAPA_PERDIDO[0])
     filas = []
+    vistos = set()
     for d in deals:
-        info = info_por_deal.get(d.get("id"), {})
+        did = d.get("id")
+        if did in vistos:  # el superset OR puede devolver un deal en ambos grupos
+            continue
+        vistos.add(did)
+        info = info_por_deal.get(did, {})
         # Excluir deals de leads de webinar (van a la hoja de Leads Importados).
         if info.get("webinar"):
             continue
         p = d.get("properties", {})
         etapa_id = p.get("dealstage") or ""
         es_perdido = (etapa_id == config.HUBSPOT_ETAPA_PERDIDO[0])
+        fcrea = _a_fecha(p.get("createdate"))
+        fcierre = _a_fecha(p.get("closedate"))
+        # Regla de pertenencia al periodo: cerrado→por cierre; abierto→por creación.
+        if etapa_id in _cerradas:
+            en_periodo = bool(fcierre and desde <= fcierre <= hasta)
+        else:
+            en_periodo = bool(fcrea and desde <= fcrea <= hasta)
+        if not en_periodo:
+            continue
         motivo = (p.get(config.HUBSPOT_PROP_MOTIVO_PERDIDO) or "").strip()
         filas.append(dict(
-            deal_id=d.get("id"),
-            fecha_creacion=_a_fecha(p.get("createdate")),
-            fecha_cierre=_a_fecha(p.get("closedate")),
+            deal_id=did,
+            fecha_creacion=fcrea,
+            fecha_cierre=fcierre,
             etapa_id=etapa_id,
             etapa=config.HUBSPOT_ETAPAS_MAP.get(etapa_id, etapa_id),
             programa=info.get("programa", "Sin asignar"),
