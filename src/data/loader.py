@@ -41,19 +41,19 @@ class DatosDashboard:
 
 
 # Caché por fuente con TTL distinto: HubSpot corto (cambia a diario), ads/GA4 largo.
-@st.cache_data(ttl=config.CACHE_TTL_ADS, show_spinner="Cargando Google Ads…")
+@st.cache_data(max_entries=6, ttl=config.CACHE_TTL_ADS, show_spinner="Cargando Google Ads…")
 def _cargar_google(desde, hasta):
     r = google_ads.obtener(desde, hasta)
     return r.df, r.origen, r.detalle
 
 
-@st.cache_data(ttl=config.CACHE_TTL_ADS, show_spinner="Cargando Meta Ads…")
+@st.cache_data(max_entries=6, ttl=config.CACHE_TTL_ADS, show_spinner="Cargando Meta Ads…")
 def _cargar_meta(desde, hasta):
     r = meta_ads.obtener(desde, hasta)
     return r.df, r.origen, r.detalle
 
 
-@st.cache_data(ttl=config.CACHE_TTL_GA4, show_spinner="Cargando GA4…")
+@st.cache_data(max_entries=6, ttl=config.CACHE_TTL_GA4, show_spinner="Cargando GA4…")
 def _cargar_ga4(desde, hasta):
     r = ga4.obtener(desde, hasta)
     rf = ga4.obtener_fuente(desde, hasta)
@@ -63,27 +63,27 @@ def _cargar_ga4(desde, hasta):
     return r.df, r.origen, r.detalle, rf.df, rc.df, rr.df, re.df
 
 
-@st.cache_data(ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando HubSpot…")
+@st.cache_data(max_entries=6, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando HubSpot…")
 def _cargar_hubspot(desde, hasta):
     leads = hubspot.obtener(desde, hasta)
     deals = hubspot.obtener_deals(desde, hasta)
     return leads.df, leads.origen, leads.detalle, deals.df
 
 
-@st.cache_data(ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando leads importados…")
+@st.cache_data(max_entries=6, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando leads importados…")
 def _cargar_importados():
     leads_i, negocios_i, origen_i = hubspot.importados()
     return leads_i, negocios_i, origen_i
 
 
-@st.cache_data(ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando actividad comercial…")
+@st.cache_data(max_entries=6, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando actividad comercial…")
 def cargar_actividad():
     """Informe de actividad de leads UVIC (llamadas, emails, intentos de contacto).
     Devuelve (estructura, origen)."""
     return hubspot.actividad_uvic()
 
 
-@st.cache_data(ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando planificación…")
+@st.cache_data(max_entries=6, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando planificación…")
 def cargar_plan():
     """Planificación trimestral (Google Sheet en vivo). Devuelve
     (estructura {pestaña: [bloques]}, origen, detalle)."""
