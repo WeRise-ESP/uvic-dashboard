@@ -158,12 +158,15 @@ def _normalizar(texto: str) -> str:
 
 # Palabras clave distintivas por programa (normalizadas). Sirven para asignar
 # CUALQUIER variante de campaña (Search, PMAX, DemandGen, Meta…) a su programa.
+# Incluye variantes catalán/castellano de las UTM (Postgrau/Posgrado,
+# Comunicacio/Comunicacion, Lideratge/Liderazgo, Marqueting/Marketing…).
 _KEYWORDS_PROGRAMA = {
     "MBA Executive": ("mbaexecutive", "executivemba"),
-    "Marketing Deportivo": ("marquetingesportiu", "sportmanagement", "gestioimarqueting"),
-    "Documentación Social": ("documentalsocial",),
-    "Comunicación Científica": ("comunicaciocientifica", "comunicaciocientifica"),
-    "Liderazgo IA": ("lideratgeia", "lideraenentorns", "intelligencia"),
+    "Marketing Deportivo": ("marquetingesportiu", "marquetingdeportivo", "marketingdeportivo",
+                            "sportmanagement", "gestioimarqueting"),
+    "Documentación Social": ("documentalsocial", "documental"),
+    "Comunicación Científica": ("comunicaciocientifica", "comunicacioncientifica"),
+    "Liderazgo IA": ("lideratgeia", "liderazgoia", "lideraenentorns", "intelligencia", "inteligencia"),
 }
 
 
@@ -194,6 +197,25 @@ def clave_campana(nombre: str) -> str:
     plataforma (Google/Meta) y la `uvic_utm_campaign` de HubSpot, tolerando
     mayúsculas, acentos y separadores (p.ej. 'Werise-DemandGen' == 'WeRise_DemandGen')."""
     return _normalizar(nombre)
+
+
+def tipo_campana(nombre: str) -> str:
+    """Tipo de campaña de Google según el nombre: 'pmax', 'demandgen', 'search'
+    o '' (Meta u otras). Sirve para emparejar campaña↔grupo de anuncio/UTM."""
+    n = _normalizar(nombre)
+    for t in ("pmax", "demandgen", "search"):
+        if t in n:
+            return t
+    return ""
+
+
+def clave_agrupacion_campana(nombre: str) -> str:
+    """Clave robusta = programa + tipo. Empareja una campaña con sus GRUPOS DE
+    ANUNCIO / variantes de UTM aunque cambien las palabras (catalán/castellano,
+    sufijos _Cast/_es/_video, truncados…). P.ej.
+    'WeRise_PMAX_NAC_Postgrau_Comunicacio_Cientifica'  ==
+    'Werise_PMAX_NAC_Posgrado_Comunicacion_Cientifica_Cast'  → Comunicación Científica|pmax."""
+    return f"{programa_por_campana(nombre)}|{tipo_campana(nombre)}"
 
 
 def estado_legible(raw: str) -> str:

@@ -79,22 +79,22 @@ _gg = df.groupby("campana")["conversiones"].sum().astype(int)
 _lh = {}
 if n_leads_g:
     _tmp = leads_g_hs.copy()
-    _tmp["_k"] = _tmp["campana"].map(config.clave_campana)
+    _tmp["_k"] = _tmp["campana"].map(config.clave_agrupacion_campana)
     _lh = _tmp.groupby("_k").size().to_dict()
 _gc = datos.ga4_campana
 # Eventos GA4 por campaña, emparejados por clave normalizada (igual que los leads).
 _gv = {}
 if not _gc.empty and {"fuente", "campana", "eventos_clave"}.issubset(_gc.columns):
     _g = _gc[_gc["fuente"].str.lower() == "google"].copy()
-    _g["_k"] = _g["campana"].map(config.clave_campana)
+    _g["_k"] = _g["campana"].map(config.clave_agrupacion_campana)
     _gv = _g.groupby("_k")["eventos_clave"].sum().to_dict()
 _comp = []
 for _camp in _gg.index:
     _comp.append(dict(
         campana=_camp,
         resultados_google=int(_gg.get(_camp, 0)),
-        leads_hubspot=int(_lh.get(config.clave_campana(_camp), 0)),
-        eventos_ga4=int(_gv.get(config.clave_campana(_camp), 0)),
+        leads_hubspot=int(_lh.get(config.clave_agrupacion_campana(_camp), 0)),
+        eventos_ga4=int(_gv.get(config.clave_agrupacion_campana(_camp), 0)),
     ))
 import pandas as _pd
 ui.tabla_totales(
@@ -128,7 +128,7 @@ tab["ctr"] = (tab["ctr"] * 100).round(2)  # ratio -> %
 tab["cpl_google"] = tab.apply(
     lambda r: r["coste"] / r["conversiones"] if r["conversiones"] else 0, axis=1)
 tab["leads_hubspot"] = tab["campana"].map(
-    lambda c: _lh.get(config.clave_campana(c), 0)).astype(int)
+    lambda c: _lh.get(config.clave_agrupacion_campana(c), 0)).astype(int)
 _cols_tab = ["campana", "programa", "impresiones", "clics", "ctr", "cpc", "coste",
              "conversiones", "cpl_google", "leads_hubspot"]
 if "estado" in tab.columns:
