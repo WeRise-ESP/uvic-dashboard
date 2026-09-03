@@ -79,8 +79,8 @@ def resumen_ads_por_programa(df_ads: pd.DataFrame) -> pd.DataFrame:
 
 def resumen_leads_por_programa(df_leads: pd.DataFrame) -> pd.DataFrame:
     """Cuenta leads por programa."""
-    if df_leads.empty:
-        return pd.DataFrame()
+    if df_leads.empty or "programa" not in df_leads.columns:
+        return pd.DataFrame(columns=["programa", "leads"])  # columnas para que el merge no falle
     return (
         df_leads.groupby("programa", as_index=False)
         .agg(leads=("lead_id", "count"))
