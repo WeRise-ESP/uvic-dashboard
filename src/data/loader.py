@@ -83,6 +83,14 @@ def cargar_actividad():
     return hubspot.actividad_uvic()
 
 
+@st.cache_data(max_entries=2, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando pipeline actual…")
+def cargar_pipeline_actual():
+    """Foto de hoy del tablero Pipeline UVIC (sin filtro de periodo).
+    Devuelve (df, origen, detalle)."""
+    r = hubspot.pipeline_actual()
+    return r.df, r.origen, r.detalle
+
+
 @st.cache_data(max_entries=6, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando planificación…")
 def cargar_plan():
     """Planificación trimestral (Google Sheet en vivo). Devuelve

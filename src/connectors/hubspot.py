@@ -98,6 +98,77 @@ def obtener_deals(desde, hasta) -> ResultadoConector:
                              "sample", "Datos de ejemplo")
 
 
+def pipeline_actual() -> ResultadoConector:
+    """Foto de HOY del Pipeline UVIC: TODOS los negocios en su etapa actual, sin
+    filtro de fecha. Equivale al tablero de HubSpot, por eso no aplica la regla de
+    periodo (cerrados por `closedate`, abiertos por `createdate`) que sí usa
+    `obtener_deals`: un negocio abierto hace meses sigue estando en el tablero."""
+    creds = _leer_secreto("hubspot")
+    if creds and creds.get("access_token"):
+        try:
+            df = _fetch_pipeline_actual(creds)
+            if df is not None:
+                if not df.empty:
+                    guardar_cache(df, "hubspot_pipeline_actual")
+                return ResultadoConector(df, "api", "HubSpot · tablero Pipeline UVIC")
+        except Exception as e:  # noqa: BLE001
+            cache = leer_cache("hubspot_pipeline_actual")
+            if cache is not None:
+                return ResultadoConector(cache, "cache", f"API falló ({e}); caché")
+
+    cache = leer_cache("hubspot_pipeline_actual")
+    if cache is not None and not cache.empty:
+        return ResultadoConector(cache, "cache", "Caché local")
+    return ResultadoConector(pd.DataFrame(), "sample", "Sin datos")
+
+
+def _fetch_pipeline_actual(creds: dict) -> pd.DataFrame:
+    """Todos los deals del Pipeline UVIC con su etapa actual (sin filtro de fecha)."""
+    import requests
+
+    token = creds["access_token"]
+    payload = {
+        "filterGroups": [{"filters": [
+            {"propertyName": "pipeline", "operator": "EQ",
+             "value": config.HUBSPOT_PIPELINE_UVIC}]}],
+        "properties": ["dealstage", "amount", "createdate", "closedate", "dealname",
+                       config.HUBSPOT_PROP_MOTIVO_PERDIDO],
+        "limit": 100,
+    }
+    deals, after = [], None
+    while True:
+        if after:
+            payload["after"] = after
+        r = requests.post(f"{API}/crm/v3/objects/deals/search",
+                          headers=_headers(token), json=payload, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        deals.extend(data.get("results", []))
+        after = data.get("paging", {}).get("next", {}).get("after")
+        if not after:
+            break
+
+    filas = []
+    for d in deals:
+        p = d.get("properties", {})
+        etapa_id = p.get("dealstage") or ""
+        es_perdido = (etapa_id == config.HUBSPOT_ETAPA_PERDIDO[0])
+        motivo = (p.get(config.HUBSPOT_PROP_MOTIVO_PERDIDO) or "").strip()
+        filas.append(dict(
+            deal_id=d.get("id"),
+            nombre=p.get("dealname") or "",
+            fecha_creacion=_a_fecha(p.get("createdate")),
+            fecha_cierre=_a_fecha(p.get("closedate")),
+            etapa_id=etapa_id,
+            etapa=config.HUBSPOT_ETAPAS_MAP.get(etapa_id, etapa_id),
+            amount=float(p.get("amount") or 0),
+            es_ganado=(etapa_id == config.HUBSPOT_STAGE_MATRICULA),
+            es_perdido=es_perdido,
+            motivo_perdido=(motivo or "Sin motivo indicado") if es_perdido else "",
+        ))
+    return pd.DataFrame(filas)
+
+
 # --------------------------------------------------------------------------- #
 # Llamadas a la API
 # --------------------------------------------------------------------------- #

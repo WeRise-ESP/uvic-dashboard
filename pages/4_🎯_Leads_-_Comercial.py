@@ -110,14 +110,27 @@ st.divider()
 # Pipeline de ventas — reparto por etapa ACTUAL (vista de tablero HubSpot)
 # --------------------------------------------------------------------------- #
 st.subheader("Pipeline de ventas · Pipeline UVIC")
-st.caption(
-    "Dónde está **ahora** cada negocio del *Pipeline UVIC*. A diferencia del embudo "
-    "(acumulado), aquí cada deal cuenta en su etapa actual e incluye los cierres "
-    "ganados y perdidos."
+_vista_pipe = st.radio(
+    "Vista del pipeline", ["Tablero completo (hoy)", "Solo el periodo seleccionado"],
+    horizontal=True, label_visibility="collapsed", key="vista_pipeline",
 )
-pipe_et = metrics.pipeline_por_etapa(deals)
+if _vista_pipe.startswith("Tablero"):
+    _pipe_df, _pipe_origen, _pipe_detalle = loader.cargar_pipeline_actual()
+    st.caption(
+        "Dónde está **ahora** cada negocio del *Pipeline UVIC*, **sin filtro de fechas**: "
+        "cuadra 1:1 con el tablero de HubSpot. Un negocio abierto hace meses sigue "
+        "contando en su etapa actual."
+    )
+else:
+    _pipe_df = deals
+    st.caption(
+        f"Solo los negocios del periodo **{etiqueta}** (cerrados por fecha de cierre, "
+        "abiertos por fecha de creación). Los negocios creados antes del periodo y aún "
+        "abiertos **no** aparecen aquí; para verlos, usa el tablero completo."
+    )
+pipe_et = metrics.pipeline_por_etapa(_pipe_df)
 if pipe_et.empty:
-    st.info("Sin negocios en el pipeline para este periodo.")
+    st.info("Sin negocios en el pipeline.")
 else:
     _hay_importe = float(pipe_et["importe"].sum()) > 0
     cols_et = st.columns(len(pipe_et))
