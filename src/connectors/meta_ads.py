@@ -107,7 +107,8 @@ def _consultar_api(creds: dict, desde, hasta) -> pd.DataFrame:
         url = url_base
         params = {
             "level": "campaign",
-            "fields": "campaign_name,impressions,clicks,spend,actions",
+            "fields": ("campaign_name,campaign_id,impressions,clicks,spend,actions,"
+                       "reach,frequency,inline_link_clicks,unique_clicks,cpm,cpc,ctr"),
             "time_increment": 1,
             "time_range": json.dumps({"since": str(ini), "until": str(fin)}),
             "access_token": token,
@@ -118,8 +119,6 @@ def _consultar_api(creds: dict, desde, hasta) -> pd.DataFrame:
             data = resp.json()
             for row in data.get("data", []):
                 nombre = row.get("campaign_name", "")
-                if not config.es_campana_werise(nombre):
-                    continue  # acotamos al scope WeRise (cualquier campaña 'WeRise…')
                 con_datos.add(nombre)
                 # OJO: Meta reporta el MISMO lead bajo dos action_type ("lead" y
                 # "offsite_conversion.fb_pixel_lead"). Sumarlos duplica → tomamos el máximo.
@@ -129,15 +128,27 @@ def _consultar_api(creds: dict, desde, hasta) -> pd.DataFrame:
                     if a.get("action_type") in ("lead", "offsite_conversion.fb_pixel_lead")
                 ]
                 leads = max(vals) if vals else 0
+                acciones = {a.get("action_type"): int(float(a.get("value", 0)))
+                            for a in row.get("actions", [])}
                 filas.append(dict(
                     fecha=pd.to_datetime(row["date_start"]).date(),
                     plataforma="Meta Ads",
                     campana=nombre,
+                    campana_id=row.get("campaign_id", ""),
+                    es_werise=bool(config.es_campana_werise(nombre)),
                     estado=estados.get(nombre, "Otra"),
                     impresiones=int(row.get("impressions", 0)),
                     clics=int(row.get("clicks", 0)),
+                    clics_enlace=int(row.get("inline_link_clicks", 0) or 0),
+                    clics_unicos=int(row.get("unique_clicks", 0) or 0),
+                    alcance=int(row.get("reach", 0) or 0),
+                    frecuencia=round(float(row.get("frequency", 0) or 0), 2),
                     coste=round(float(row.get("spend", 0)), 2),
                     conversiones=leads,
+                    vistas_landing=acciones.get("landing_page_view", 0),
+                    leads_nativos=acciones.get("onsite_conversion.lead_grouped", 0),
+                    interacciones=acciones.get("post_engagement", 0),
+                    reproducciones=acciones.get("video_view", 0),
                 ))
             url = data.get("paging", {}).get("next")
             params = None  # la URL 'next' ya trae los parámetros
@@ -146,16 +157,89 @@ def _consultar_api(creds: dict, desde, hasta) -> pd.DataFrame:
     # Incluir TODAS las campañas WeRise (aunque estén pausadas o sin gasto en el
     # periodo) con una fila a cero, para que siempre se muestren en el dashboard.
     for nombre, est in estados.items():
-        if config.es_campana_werise(nombre) and nombre not in con_datos:
+        if nombre not in con_datos:
             con_datos.add(nombre)
             filas.append(dict(
                 fecha=pd.to_datetime(hasta).date(),
                 plataforma="Meta Ads",
                 campana=nombre,
+                campana_id="",
+                es_werise=bool(config.es_campana_werise(nombre)),
                 estado=est,
-                impresiones=0, clics=0, coste=0.0, conversiones=0,
+                impresiones=0, clics=0, clics_enlace=0, clics_unicos=0,
+                alcance=0, frecuencia=0.0, coste=0.0, conversiones=0,
+                vistas_landing=0, leads_nativos=0, interacciones=0, reproducciones=0,
             ))
 
     return pd.DataFrame(filas)
 
 
+
+
+def obtener_adsets(desde, hasta) -> ResultadoConector:
+    """Rendimiento por CAMPAÑA + GRUPO DE ANUNCIOS (agregado del periodo)."""
+    creds = _leer_secreto("meta_ads")
+    if not (creds and creds.get("access_token")):
+        return ResultadoConector(pd.DataFrame(), "sample", "Sin credenciales de Meta")
+    try:
+        df = _consultar_adsets(creds, desde, hasta)
+    except Exception as e:  # noqa: BLE001
+        cache = leer_cache("meta_adsets")
+        if cache is not None and not cache.empty:
+            return ResultadoConector(cache, "cache", f"API falló ({e}); uso caché")
+        return ResultadoConector(pd.DataFrame(), "error", f"{type(e).__name__}: {e}")
+    try:
+        guardar_cache(df, "meta_adsets")
+    except Exception:  # noqa: BLE001
+        pass
+    return ResultadoConector(df, "api", "Meta · grupos de anuncios")
+
+
+def _consultar_adsets(creds: dict, desde, hasta) -> pd.DataFrame:
+    """Insights a nivel adset, agregados en todo el periodo (sin time_increment)."""
+    import json
+
+    version = creds.get("api_version", "v21.0")
+    account = creds.get("ad_account_id", config.META_AD_ACCOUNT_ID)
+    token = creds["access_token"]
+
+    url = f"https://graph.facebook.com/{version}/{account}/insights"
+    params = {
+        "level": "adset",
+        "fields": ("campaign_name,campaign_id,adset_name,adset_id,impressions,clicks,"
+                   "spend,actions,reach,frequency,inline_link_clicks,cpm,cpc,ctr"),
+        "time_range": json.dumps({"since": str(desde), "until": str(hasta)}),
+        "access_token": token,
+        "limit": 500,
+    }
+    filas = []
+    while url:
+        data = _get_meta(url, params).json()
+        for row in data.get("data", []):
+            acciones = {a.get("action_type"): int(float(a.get("value", 0)))
+                        for a in row.get("actions", [])}
+            # Mismo criterio que a nivel campaña: el lead se reporta bajo dos
+            # action_type distintos, así que tomamos el máximo, no la suma.
+            leads = max([acciones.get("lead", 0),
+                         acciones.get("offsite_conversion.fb_pixel_lead", 0)] or [0])
+            gasto = round(float(row.get("spend", 0)), 2)
+            filas.append(dict(
+                campana=row.get("campaign_name", ""),
+                campana_id=row.get("campaign_id", ""),
+                grupo=row.get("adset_name", ""),
+                grupo_id=row.get("adset_id", ""),
+                es_werise=bool(config.es_campana_werise(row.get("campaign_name", ""))),
+                impresiones=int(row.get("impressions", 0)),
+                clics=int(row.get("clicks", 0)),
+                clics_enlace=int(row.get("inline_link_clicks", 0) or 0),
+                alcance=int(row.get("reach", 0) or 0),
+                frecuencia=round(float(row.get("frequency", 0) or 0), 2),
+                coste=gasto,
+                conversiones=leads,
+                leads_nativos=acciones.get("onsite_conversion.lead_grouped", 0),
+                vistas_landing=acciones.get("landing_page_view", 0),
+                cpl=round(gasto / leads, 2) if leads else 0.0,
+            ))
+        url = data.get("paging", {}).get("next")
+        params = None
+    return pd.DataFrame(filas)

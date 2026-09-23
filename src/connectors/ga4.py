@@ -297,3 +297,16 @@ def _eventos_campana(creds: dict, desde, hasta) -> pd.DataFrame:
             df[ev] = 0
     df["total"] = df[config.GA4_EVENTOS_CLAVE].sum(axis=1)
     return df.sort_values("total", ascending=False).drop(columns="total")
+
+
+# --------------------------------------------------------------------------- #
+# Sesiones y eventos clave por campaña + contenido del anuncio (utm_content).
+# Meta rellena utm_content con {{adset.id}} en la mayoría de campañas, así que
+# sirve para emparejar con el grupo de anuncios; en algunas usa {{ad.name}}.
+# --------------------------------------------------------------------------- #
+def obtener_adset(desde, hasta) -> ResultadoConector:
+    return _obtener_agrupado(
+        desde, hasta,
+        [("sessionCampaignName", "campana"), ("sessionManualAdContent", "contenido"),
+         ("sessionSource", "fuente")],
+        "ga4_adset", lambda d: pd.DataFrame(columns=["campana", "contenido", "fuente"]))

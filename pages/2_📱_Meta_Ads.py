@@ -17,10 +17,28 @@ ui.aviso_origenes(datos.origenes, datos.detalles)
 
 ui.cabecera("Meta Ads", f"Cuenta {config.META_AD_ACCOUNT_ID} · social WeRise · {etiqueta}")
 
-df = datos.meta
+# --- Ámbito de las campañas -------------------------------------------------- #
+_todas = datos.meta_todas if not datos.meta_todas.empty else datos.meta
+_n_todas = _todas["campana"].nunique() if not _todas.empty else 0
+_n_werise = (_todas[_todas["es_werise"]]["campana"].nunique()
+             if not _todas.empty and "es_werise" in _todas.columns else 0)
+_ambito = st.radio(
+    "Ámbito",
+    [f"Campañas WeRise ({_n_werise})", f"Toda la cuenta ({_n_todas})"],
+    horizontal=True, label_visibility="collapsed", key="ambito_meta",
+)
+_solo_werise = _ambito.startswith("Campañas WeRise")
+df = datos.meta if _solo_werise else _todas
 if df.empty:
     st.warning("No hay datos de Meta Ads.")
     st.stop()
+if not _solo_werise:
+    st.caption(
+        "Mostrando **todas las campañas** de la cuenta, incluidas las que no son de "
+        "WeRise (grados, másteres oficiales…). Esas campañas no tienen leads en "
+        "HubSpot, así que el CPL real y la comparativa de medición solo son válidos "
+        "para el ámbito WeRise."
+    )
 
 r = metrics.resumen_plataforma(df).iloc[0]
 t_inv = metrics.tendencia(df, "coste", "fecha")
@@ -62,6 +80,32 @@ cpl_hs = r["coste"] / n_leads_hs if n_leads_hs else 0
 ui.kpi(c8, "CPL real (HubSpot)", eur(cpl_hs, 2) if n_leads_hs else "—",
        f"{num(n_leads_hs)} leads con UTM de Meta",
        estado=config.estado_bench("cpl", cpl_hs) if n_leads_hs else None)
+
+# --- Métricas de alcance y comportamiento ------------------------------------ #
+_alc = int(df["alcance"].max()) if "alcance" in df.columns and not df.empty else 0
+_frec = float(df["frecuencia"].mean()) if "frecuencia" in df.columns and not df.empty else 0.0
+_cenl = int(df["clics_enlace"].sum()) if "clics_enlace" in df.columns else 0
+_vlp = int(df["vistas_landing"].sum()) if "vistas_landing" in df.columns else 0
+_nat = int(df["leads_nativos"].sum()) if "leads_nativos" in df.columns else 0
+_inter = int(df["interacciones"].sum()) if "interacciones" in df.columns else 0
+_repro = int(df["reproducciones"].sum()) if "reproducciones" in df.columns else 0
+st.subheader("Alcance y comportamiento")
+c9, c10, c11, c12 = st.columns(4)
+ui.kpi(c9, "Alcance", num(_alc), "Personas distintas (máx. diario)")
+ui.kpi(c10, "Frecuencia media", f"{_frec:.2f}",
+       "Impactos por persona · >3 indica fatiga",
+       estado="off" if _frec >= 3 else "ok" if _frec else None)
+ui.kpi(c11, "Clics en el enlace", num(_cenl),
+       f"{pct(_cenl/r['clics'] if r['clics'] else 0,1)} de los clics")
+ui.kpi(c12, "Vistas de la landing", num(_vlp),
+       f"{pct(_vlp/_cenl if _cenl else 0,1)} de los clics en el enlace llegan",
+       estado="off" if _cenl and _vlp/_cenl < 0.5 else "ok" if _vlp else None)
+c13, c14, c15, c16 = st.columns(4)
+ui.kpi(c13, "Leads en formulario nativo", num(_nat), "Formularios instantáneos de Meta")
+ui.kpi(c14, "Interacciones", num(_inter), "Post engagement")
+ui.kpi(c15, "Reproducciones de vídeo", num(_repro), "Video views")
+ui.kpi(c16, "Clics únicos", num(int(df["clics_unicos"].sum()) if "clics_unicos" in df.columns else 0),
+       "Personas distintas que hicieron clic")
 
 if resultados == 0:
     st.warning(
@@ -112,6 +156,71 @@ ui.tabla_totales(
         "eventos_ga4": st.column_config.NumberColumn("Eventos clave GA4", format="%d"),
     },
 )
+
+# --- Comparativa de medición por campaña y grupo de anuncios ----------------- #
+st.subheader("Comparativa de medición por campaña y grupo de anuncios")
+_ads = datos.meta_adsets
+if _solo_werise and not _ads.empty and "es_werise" in _ads.columns:
+    _ads = _ads[_ads["es_werise"]]
+if _ads.empty:
+    st.info("Sin datos de grupos de anuncios para el periodo.")
+else:
+    # GA4: Meta rellena utm_content con el ID del grupo en la mayoría de campañas,
+    # así que emparejamos por ID y, si no, por nombre del grupo.
+    _ga = datos.ga4_adset
+    _ev_id, _ev_nom = {}, {}
+    if not _ga.empty and {"contenido", "eventos_clave"}.issubset(_ga.columns):
+        _gm = _ga[_ga["fuente"].str.lower().isin(_FUENTES_META)] if "fuente" in _ga.columns else _ga
+        for _, _r in _gm.iterrows():
+            _k = str(_r["contenido"]).strip()
+            _ev_id[_k] = _ev_id.get(_k, 0) + int(_r["eventos_clave"])
+            _ev_nom[_k.lower()] = _ev_nom.get(_k.lower(), 0) + int(_r["eventos_clave"])
+
+    # HubSpot no guarda utm_content, así que solo se puede atribuir el lead al
+    # grupo cuando la campaña tiene un único grupo con gasto: en el resto, "—".
+    _grupos_por_camp = _ads[_ads["coste"] > 0].groupby("campana")["grupo"].nunique().to_dict()
+
+    _filas = []
+    for _, _r in _ads.sort_values("coste", ascending=False).iterrows():
+        _c = _r["campana"]
+        _clave = config.clave_agrupacion_campana(_c)
+        _leads_camp = _lh.get(_clave, 0)
+        _unico = _grupos_por_camp.get(_c, 0) == 1 and _r["coste"] > 0
+        _ga4 = _ev_id.get(str(_r["grupo_id"]), _ev_nom.get(str(_r["grupo"]).lower(), 0))
+        _filas.append(dict(
+            campana=_c, grupo=_r["grupo"],
+            coste=_r["coste"], resultados_meta=int(_r["conversiones"]),
+            leads_hubspot=(int(_leads_camp) if _unico else None),
+            eventos_ga4=int(_ga4),
+            clics_enlace=int(_r["clics_enlace"]), frecuencia=_r["frecuencia"],
+            cpl_meta=_r["cpl"],
+        ))
+    _df_ads = _pd.DataFrame(_filas)
+    ui.tabla_totales(
+        _df_ads,
+        columnas=["campana", "grupo", "coste", "clics_enlace", "frecuencia",
+                  "resultados_meta", "cpl_meta", "leads_hubspot", "eventos_ga4"],
+        sum_cols=["coste", "clics_enlace", "resultados_meta", "leads_hubspot", "eventos_ga4"],
+        ratios={"cpl_meta": ("coste", "resultados_meta", 1, " €")},
+        column_config={
+            "campana": "Campaña",
+            "grupo": "Grupo de anuncios",
+            "coste": st.column_config.NumberColumn("Inversión", format="%.2f €"),
+            "clics_enlace": st.column_config.NumberColumn("Clics enlace", format="%d"),
+            "frecuencia": st.column_config.NumberColumn("Frec.", format="%.2f"),
+            "resultados_meta": st.column_config.NumberColumn("Resultados Meta", format="%d"),
+            "cpl_meta": st.column_config.NumberColumn("CPL Meta", format="%.2f €"),
+            "leads_hubspot": st.column_config.NumberColumn("Leads HubSpot (UTM)", format="%d"),
+            "eventos_ga4": st.column_config.NumberColumn("Eventos clave GA4", format="%d"),
+        },
+    )
+    st.caption(
+        "**Leads HubSpot** solo puede atribuirse al grupo cuando la campaña tiene un "
+        "único grupo activo: HubSpot guarda `utm_campaign` pero no `utm_content`, así "
+        "que en campañas con varios grupos aparece vacío (el total sí está en la tabla "
+        "por campaña). **Eventos GA4** se emparejan por el `utm_content` que Meta "
+        "rellena con el ID del grupo."
+    )
 
 camp = metrics.resumen_campana(df)
 

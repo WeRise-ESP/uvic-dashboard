@@ -29,6 +29,9 @@ class DatosDashboard:
     ga4_campana: pd.DataFrame = field(default_factory=pd.DataFrame)
     ga4_resumen: pd.DataFrame = field(default_factory=pd.DataFrame)
     ga4_eventos: pd.DataFrame = field(default_factory=pd.DataFrame)
+    meta_todas: pd.DataFrame = field(default_factory=pd.DataFrame)
+    meta_adsets: pd.DataFrame = field(default_factory=pd.DataFrame)
+    ga4_adset: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     @property
     def ads(self) -> pd.DataFrame:
@@ -53,6 +56,13 @@ def _cargar_meta(desde, hasta):
     return r.df, r.origen, r.detalle
 
 
+@st.cache_data(max_entries=4, ttl=config.CACHE_TTL_ADS,
+               show_spinner="Cargando grupos de anuncios de Meta…")
+def _cargar_meta_adsets(desde, hasta):
+    r = meta_ads.obtener_adsets(desde, hasta)
+    return r.df, r.origen, r.detalle
+
+
 @st.cache_data(max_entries=6, ttl=config.CACHE_TTL_GA4, show_spinner="Cargando GA4…")
 def _cargar_ga4(desde, hasta):
     r = ga4.obtener(desde, hasta)
@@ -60,7 +70,8 @@ def _cargar_ga4(desde, hasta):
     rc = ga4.obtener_campana(desde, hasta)
     rr = ga4.obtener_resumen(desde, hasta)
     re = ga4.obtener_eventos_campana(desde, hasta)
-    return r.df, r.origen, r.detalle, rf.df, rc.df, rr.df, re.df
+    ra = ga4.obtener_adset(desde, hasta)
+    return r.df, r.origen, r.detalle, rf.df, rc.df, rr.df, re.df, ra.df
 
 
 @st.cache_data(max_entries=6, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando HubSpot…")
@@ -108,8 +119,14 @@ def cargar_plan():
 
 def cargar_todo(desde, hasta) -> DatosDashboard:
     g_df, g_o, g_d = _cargar_google(desde, hasta)
-    m_df, m_o, m_d = _cargar_meta(desde, hasta)
-    a_df, a_o, a_d, af_df, ac_df, ar_df, ae_df = _cargar_ga4(desde, hasta)
+    m_todas, m_o, m_d = _cargar_meta(desde, hasta)
+    # El scope por defecto del dashboard es WeRise: el resto de campañas de la
+    # cuenta (grados, másteres oficiales…) no tienen leads en HubSpot y
+    # distorsionarían el CPL global. La página de Meta Ads sí puede verlas todas.
+    m_df = (m_todas[m_todas["es_werise"]].copy()
+            if not m_todas.empty and "es_werise" in m_todas.columns else m_todas)
+    ms_df, _ms_o, _ms_d = _cargar_meta_adsets(desde, hasta)
+    a_df, a_o, a_d, af_df, ac_df, ar_df, ae_df, aa_df = _cargar_ga4(desde, hasta)
     l_df, l_o, l_d, d_df = _cargar_hubspot(desde, hasta)
     li_df, ni_df, oi = _cargar_importados()
     return DatosDashboard(
@@ -128,4 +145,5 @@ def cargar_todo(desde, hasta) -> DatosDashboard:
         },
         leads_import=li_df, negocios_import=ni_df, origen_import=oi,
         ga4_fuente=af_df, ga4_campana=ac_df, ga4_resumen=ar_df, ga4_eventos=ae_df,
+        meta_todas=m_todas, meta_adsets=ms_df, ga4_adset=aa_df,
     )
