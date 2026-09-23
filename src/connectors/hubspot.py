@@ -104,22 +104,22 @@ def pipeline_actual() -> ResultadoConector:
     periodo (cerrados por `closedate`, abiertos por `createdate`) que sí usa
     `obtener_deals`: un negocio abierto hace meses sigue estando en el tablero."""
     creds = _leer_secreto("hubspot")
-    if creds and creds.get("access_token"):
-        try:
-            df = _fetch_pipeline_actual(creds)
-            if df is not None:
-                if not df.empty:
-                    guardar_cache(df, "hubspot_pipeline_actual")
-                return ResultadoConector(df, "api", "HubSpot · tablero Pipeline UVIC")
-        except Exception as e:  # noqa: BLE001
-            cache = leer_cache("hubspot_pipeline_actual")
-            if cache is not None:
-                return ResultadoConector(cache, "cache", f"API falló ({e}); caché")
-
-    cache = leer_cache("hubspot_pipeline_actual")
-    if cache is not None and not cache.empty:
-        return ResultadoConector(cache, "cache", "Caché local")
-    return ResultadoConector(pd.DataFrame(), "sample", "Sin datos")
+    if not (creds and creds.get("access_token")):
+        return ResultadoConector(pd.DataFrame(), "sample", "Sin credenciales de HubSpot")
+    try:
+        df = _fetch_pipeline_actual(creds)
+    except Exception as e:  # noqa: BLE001
+        cache = leer_cache("hubspot_pipeline_actual")
+        if cache is not None and not cache.empty:
+            return ResultadoConector(cache, "cache", f"API falló ({e}); uso caché")
+        # Sin caché no hay nada que mostrar: propagamos el motivo a la UI.
+        return ResultadoConector(pd.DataFrame(), "error", f"{type(e).__name__}: {e}")
+    # Guardar en caché es best-effort: que falle no debe tumbar el dato ya obtenido.
+    try:
+        guardar_cache(df, "hubspot_pipeline_actual")
+    except Exception:  # noqa: BLE001
+        pass
+    return ResultadoConector(df, "api", "HubSpot · tablero Pipeline UVIC")
 
 
 def _fetch_pipeline_actual(creds: dict) -> pd.DataFrame:
@@ -139,8 +139,8 @@ def _fetch_pipeline_actual(creds: dict) -> pd.DataFrame:
     while True:
         if after:
             payload["after"] = after
-        r = requests.post(f"{API}/crm/v3/objects/deals/search",
-                          headers=_headers(token), json=payload, timeout=60)
+        r = _peticion("POST", f"{API}/crm/v3/objects/deals/search",
+                      headers=_headers(token), json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
         deals.extend(data.get("results", []))
@@ -174,6 +174,38 @@ def _fetch_pipeline_actual(creds: dict) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def _peticion(metodo: str, url: str, *, headers: dict, json: dict | None = None,
+              params: dict | None = None, timeout: int = 60, intentos: int = 4):
+    """POST/GET a HubSpot con reintentos ante 429 y 5xx.
+
+    La Search API admite ~4 peticiones por segundo; el dashboard encadena varias
+    búsquedas por página, así que un 429 puntual es esperable y no debe dejar la
+    sección sin datos. Respeta la cabecera `Retry-After` cuando viene."""
+    import time
+
+    import requests
+
+    resp = None
+    for i in range(intentos):
+        if metodo == "POST":
+            resp = requests.post(url, headers=headers, json=json, timeout=timeout)
+        else:
+            resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+        if resp.status_code < 400:
+            return resp
+        if resp.status_code in (429, 500, 502, 503, 504) and i < intentos - 1:
+            espera = 1.0 * (2 ** i)  # 1s, 2s, 4s
+            try:
+                espera = max(espera, float(resp.headers.get("Retry-After", 0)))
+            except (TypeError, ValueError):
+                pass
+            time.sleep(min(espera, 10))
+            continue
+        break
+    resp.raise_for_status()
+    return resp
 
 
 def _rango_ms(desde, hasta) -> tuple[int, int]:
@@ -215,8 +247,8 @@ def _fetch_leads(creds: dict, desde, hasta) -> pd.DataFrame:
     while True:
         if after:
             payload["after"] = after
-        r = requests.post(f"{API}/crm/v3/objects/contacts/search",
-                          headers=_headers(token), json=payload, timeout=60)
+        r = _peticion("POST", f"{API}/crm/v3/objects/contacts/search",
+                      headers=_headers(token), json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
         for c in data.get("results", []):
@@ -283,8 +315,8 @@ def _fetch_deals(creds: dict, desde, hasta) -> pd.DataFrame:
     while True:
         if after:
             payload["after"] = after
-        r = requests.post(f"{API}/crm/v3/objects/deals/search",
-                          headers=_headers(token), json=payload, timeout=60)
+        r = _peticion("POST", f"{API}/crm/v3/objects/deals/search",
+                      headers=_headers(token), json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
         deals.extend(data.get("results", []))
@@ -344,7 +376,8 @@ def _programa_por_deal(token: str, deal_ids: list[str]) -> dict:
 
     # 1) deal -> contacto (associations v4 batch)
     try:
-        r = requests.post(
+        r = _peticion(
+            "POST",
             f"{API}/crm/v4/associations/deal/contact/batch/read",
             headers=_headers(token),
             json={"inputs": [{"id": i} for i in deal_ids]}, timeout=60)
@@ -366,7 +399,8 @@ def _programa_por_deal(token: str, deal_ids: list[str]) -> dict:
 
     # 2) contacto -> uvic_curso + UTMs (batch read)
     try:
-        r = requests.post(
+        r = _peticion(
+            "POST",
             f"{API}/crm/v3/objects/contacts/batch/read",
             headers=_headers(token),
             json={"properties": ["uvic_curso", "uvic_utm_campaign",
@@ -426,7 +460,7 @@ def _mapa_etapas_deals(token: str) -> dict:
     import requests
     stages, pipelines = {}, {}
     try:
-        r = requests.get(f"{API}/crm/v3/pipelines/deals", headers=_headers(token), timeout=60)
+        r = _peticion("GET", f"{API}/crm/v3/pipelines/deals", headers=_headers(token), timeout=60)
         r.raise_for_status()
         for p in r.json().get("results", []):
             pipelines[p["id"]] = p.get("label", p["id"])
@@ -464,8 +498,8 @@ def _fetch_importados(creds: dict):
     while True:
         if after:
             payload["after"] = after
-        r = requests.post(f"{API}/crm/v3/objects/contacts/search",
-                          headers=_headers(token), json=payload, timeout=60)
+        r = _peticion("POST", f"{API}/crm/v3/objects/contacts/search",
+                      headers=_headers(token), json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
         contactos.extend(data.get("results", []))
@@ -513,7 +547,7 @@ def _negocios_de_contactos(token: str, contact_ids: list, mapa: dict) -> pd.Data
     # contacto -> deals
     deal_to_contact, deal_ids = {}, set()
     try:
-        r = requests.post(f"{API}/crm/v4/associations/contact/deal/batch/read",
+        r = _peticion("POST", f"{API}/crm/v4/associations/contact/deal/batch/read",
                           headers=_headers(token),
                           json={"inputs": [{"id": i} for i in contact_ids]}, timeout=60)
         r.raise_for_status()
@@ -530,7 +564,7 @@ def _negocios_de_contactos(token: str, contact_ids: list, mapa: dict) -> pd.Data
 
     # deals -> propiedades
     try:
-        r = requests.post(f"{API}/crm/v3/objects/deals/batch/read",
+        r = _peticion("POST", f"{API}/crm/v3/objects/deals/batch/read",
                           headers=_headers(token),
                           json={"properties": ["dealname", "dealstage", "pipeline", "amount", "createdate"],
                                 "inputs": [{"id": d} for d in deal_ids]}, timeout=60)
@@ -562,7 +596,7 @@ def _disposiciones(token: str) -> dict:
     """Mapa id->etiqueta de resultados de llamada del portal (o el estándar)."""
     import requests
     try:
-        r = requests.get(f"{API}/calling/v1/dispositions",
+        r = _peticion("GET", f"{API}/calling/v1/dispositions",
                          headers=_headers(token), timeout=30)
         if r.status_code == 200:
             m = {d.get("id"): d.get("label") for d in r.json() if d.get("id")}
@@ -579,7 +613,7 @@ def _asociadas(token: str, ids: list, tipo: str) -> set:
     got = set()
     for i in range(0, len(ids), 100):
         try:
-            r = requests.post(f"{API}/crm/v4/associations/contact/{tipo}/batch/read",
+            r = _peticion("POST", f"{API}/crm/v4/associations/contact/{tipo}/batch/read",
                               headers=_headers(token),
                               json={"inputs": [{"id": c} for c in ids[i:i + 100]]}, timeout=60)
             if r.status_code not in (200, 207):
@@ -622,7 +656,7 @@ def actividad_uvic():
         while True:
             if after:
                 payload["after"] = after
-            r = requests.post(f"{API}/crm/v3/objects/contacts/search",
+            r = _peticion("POST", f"{API}/crm/v3/objects/contacts/search",
                               headers=_headers(token), json=payload, timeout=60)
             r.raise_for_status()
             data = r.json()
@@ -664,7 +698,7 @@ def actividad_uvic():
     por_res, dur = {}, []
     for i in range(0, len(call_ids), 100):
         try:
-            r = requests.post(f"{API}/crm/v3/objects/calls/batch/read",
+            r = _peticion("POST", f"{API}/crm/v3/objects/calls/batch/read",
                               headers=_headers(token),
                               json={"properties": ["hs_call_disposition", "hs_call_duration"],
                                     "inputs": [{"id": c} for c in call_ids[i:i + 100]]}, timeout=60)

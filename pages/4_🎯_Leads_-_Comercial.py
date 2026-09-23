@@ -116,6 +116,8 @@ _vista_pipe = st.radio(
 )
 if _vista_pipe.startswith("Tablero"):
     _pipe_df, _pipe_origen, _pipe_detalle = loader.cargar_pipeline_actual()
+    if _pipe_origen != "api":
+        st.warning(f"No se pudo leer el tablero de HubSpot · {_pipe_detalle}")
     st.caption(
         "Dónde está **ahora** cada negocio del *Pipeline UVIC*, **sin filtro de fechas**: "
         "cuadra 1:1 con el tablero de HubSpot. Un negocio abierto hace meses sigue "
