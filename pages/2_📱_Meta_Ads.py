@@ -188,7 +188,7 @@ else:
         _unico = _grupos_por_camp.get(_c, 0) == 1 and _r["coste"] > 0
         _ga4 = _ev_id.get(str(_r["grupo_id"]), _ev_nom.get(str(_r["grupo"]).lower(), 0))
         _filas.append(dict(
-            campana=_c, grupo=_r["grupo"],
+            campana=_c, grupo=_r["grupo"], estado=_r.get("estado", "Otra"),
             coste=_r["coste"], resultados_meta=int(_r["conversiones"]),
             leads_hubspot=(int(_leads_camp) if _unico else None),
             eventos_ga4=int(_ga4),
@@ -198,13 +198,14 @@ else:
     _df_ads = _pd.DataFrame(_filas)
     ui.tabla_totales(
         _df_ads,
-        columnas=["campana", "grupo", "coste", "clics_enlace", "frecuencia",
+        columnas=["campana", "grupo", "estado", "coste", "clics_enlace", "frecuencia",
                   "resultados_meta", "cpl_meta", "leads_hubspot", "eventos_ga4"],
         sum_cols=["coste", "clics_enlace", "resultados_meta", "leads_hubspot", "eventos_ga4"],
         ratios={"cpl_meta": ("coste", "resultados_meta", 1, " €")},
         column_config={
             "campana": "Campaña",
             "grupo": "Grupo de anuncios",
+            "estado": "Estado",
             "coste": st.column_config.NumberColumn("Inversión", format="%.2f €"),
             "clics_enlace": st.column_config.NumberColumn("Clics enlace", format="%d"),
             "frecuencia": st.column_config.NumberColumn("Frec.", format="%.2f"),

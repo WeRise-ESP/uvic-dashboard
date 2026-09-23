@@ -203,6 +203,29 @@ def _consultar_adsets(creds: dict, desde, hasta) -> pd.DataFrame:
     account = creds.get("ad_account_id", config.META_AD_ACCOUNT_ID)
     token = creds["access_token"]
 
+    # Inventario de grupos: nombre, estado y campaña. Sirve para (a) etiquetar el
+    # estado y (b) incluir los grupos sin gasto en el periodo, que de otro modo no
+    # aparecen porque insights solo devuelve los que tuvieron actividad.
+    inventario = {}
+    try:
+        camps = {}
+        rc = _get_meta(f"https://graph.facebook.com/{version}/{account}/campaigns",
+                       {"fields": "name,effective_status", "limit": 500, "access_token": token})
+        for cp in rc.json().get("data", []):
+            camps[cp["id"]] = cp.get("name", "")
+        ra = _get_meta(f"https://graph.facebook.com/{version}/{account}/adsets",
+                       {"fields": "name,effective_status,campaign_id", "limit": 500,
+                        "access_token": token})
+        for a in ra.json().get("data", []):
+            inventario[a["id"]] = dict(
+                grupo=a.get("name", ""),
+                campana=camps.get(a.get("campaign_id", ""), ""),
+                campana_id=a.get("campaign_id", ""),
+                estado=config.estado_legible(a.get("effective_status")),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
     url = f"https://graph.facebook.com/{version}/{account}/insights"
     params = {
         "level": "adset",
@@ -229,6 +252,7 @@ def _consultar_adsets(creds: dict, desde, hasta) -> pd.DataFrame:
                 grupo=row.get("adset_name", ""),
                 grupo_id=row.get("adset_id", ""),
                 es_werise=bool(config.es_campana_werise(row.get("campaign_name", ""))),
+                estado=inventario.get(row.get("adset_id", ""), {}).get("estado", "Otra"),
                 impresiones=int(row.get("impressions", 0)),
                 clics=int(row.get("clicks", 0)),
                 clics_enlace=int(row.get("inline_link_clicks", 0) or 0),
@@ -242,4 +266,19 @@ def _consultar_adsets(creds: dict, desde, hasta) -> pd.DataFrame:
             ))
         url = data.get("paging", {}).get("next")
         params = None
+
+    # Grupos sin actividad en el periodo: se muestran a cero con su estado, para
+    # que la foto de la cuenta esté completa (igual que a nivel de campaña).
+    con_datos = {f["grupo_id"] for f in filas}
+    for aid, inv in inventario.items():
+        if aid in con_datos or not inv.get("campana"):
+            continue
+        filas.append(dict(
+            campana=inv["campana"], campana_id=inv["campana_id"],
+            grupo=inv["grupo"], grupo_id=aid,
+            es_werise=bool(config.es_campana_werise(inv["campana"])),
+            estado=inv["estado"],
+            impresiones=0, clics=0, clics_enlace=0, alcance=0, frecuencia=0.0,
+            coste=0.0, conversiones=0, leads_nativos=0, vistas_landing=0, cpl=0.0,
+        ))
     return pd.DataFrame(filas)
