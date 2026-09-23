@@ -15,3 +15,9 @@ google-auth>=2.29           # Service Account para GA4
 # Planificación (Google Sheet en vivo)
 gspread>=6.0
 openpyxl>=3.1
+
+# Nota: tocar este archivo fuerza a Streamlit Cloud a reconstruir el entorno y
+# reiniciar el proceso. Necesario cuando se añaden funciones nuevas a los módulos
+# de `src/`: la plataforma recarga las páginas en caliente pero mantiene los
+# módulos ya importados en `sys.modules` (síntoma: AttributeError en una función
+# que sí existe en el repo).
