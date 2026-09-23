@@ -159,22 +159,35 @@ with col_t2:
     else:
         st.info("Sin leads en el período.")
 
-# --- Gráficos diarios: conversiones y leads (totales) ------------------------ #
-col_g1, col_g2 = st.columns(2)
-with col_g1:
-    st.subheader("Conversiones diarias")
-    if not datos.ads.empty:
-        serie_conv = datos.ads.groupby("fecha", as_index=False)["conversiones"].sum()
-        ui.linea_temporal(serie_conv, x="fecha", y="conversiones",
-                          color=None, titulo="", y_label="Conversiones/día")
-with col_g2:
-    st.subheader("Leads diarios")
-    if not datos.leads.empty:
-        serie_leads = (datos.leads.groupby("fecha_creacion", as_index=False)
-                       .agg(leads=("lead_id", "count"))
-                       .rename(columns={"fecha_creacion": "fecha"}))
-        ui.linea_temporal(serie_leads, x="fecha", y="leads",
-                          color=None, titulo="", y_label="Leads/día")
+# --- Gráficos diarios totales (inversión, leads, conversiones) --------------- #
+st.divider()
+st.subheader("Evolución diaria · totales")
+
+st.markdown("**Inversión diaria total** · Google Ads + Meta Ads")
+if not datos.ads.empty:
+    serie_inv = datos.ads.groupby("fecha", as_index=False)["coste"].sum()
+    ui.linea_temporal(serie_inv, x="fecha", y="coste",
+                      color=None, titulo="", y_label="€/día")
+else:
+    st.info("Sin datos de plataformas.")
+
+st.markdown("**Leads diarios totales** · HubSpot")
+if not datos.leads.empty:
+    serie_leads = (datos.leads.groupby("fecha_creacion", as_index=False)
+                   .agg(leads=("lead_id", "count"))
+                   .rename(columns={"fecha_creacion": "fecha"}))
+    ui.linea_temporal(serie_leads, x="fecha", y="leads",
+                      color=None, titulo="", y_label="Leads/día")
+else:
+    st.info("Sin leads en el período.")
+
+st.markdown("**Conversiones diarias totales** · Google Ads + Meta Ads")
+if not datos.ads.empty:
+    serie_conv = datos.ads.groupby("fecha", as_index=False)["conversiones"].sum()
+    ui.linea_temporal(serie_conv, x="fecha", y="conversiones",
+                      color=None, titulo="", y_label="Conversiones/día")
+else:
+    st.info("Sin datos de plataformas.")
 
 col_a, col_b = st.columns(2)
 with col_a:
