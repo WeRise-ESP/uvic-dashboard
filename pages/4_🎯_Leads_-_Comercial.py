@@ -1,6 +1,7 @@
 """Página: Leads - Comercial — leads UVic por programa, CPL, embudo, pipeline y tasas."""
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
 from src import config
@@ -163,6 +164,144 @@ else:
     ui.tabla_totales(tp, columnas=_cols,
                      sum_cols=["deals"] + (["importe"] if _hay_importe else []),
                      column_config=_cfg)
+
+st.divider()
+
+# --------------------------------------------------------------------------- #
+# Desglose por programa: captación y actividad comercial del periodo
+# --------------------------------------------------------------------------- #
+st.subheader("Captación y actividad comercial por programa")
+_act, _act_origen = loader.cargar_actividad_programa(desde, hasta)
+if _act is None:
+    st.warning(f"No se pudo leer la actividad comercial de HubSpot · {_act_origen}")
+else:
+    _comerciales = " y ".join(config.HUBSPOT_OWNERS_UVIC.values())
+    _t = _act["totales"]
+    st.caption(
+        f"Periodo **{etiqueta}**. Los **leads** se cuentan por fecha de creación; las "
+        f"**actividades** por su propia fecha, y solo las de leads UVic (cartera de "
+        f"{_comerciales}: {num(_t['cartera'])} contactos con `uvic_curso`). "
+        "Una actividad de un lead captado antes del periodo cuenta igual, porque el "
+        "trabajo comercial se hizo dentro del periodo."
+    )
+
+    a1, a2, a3, a4, a5 = st.columns(5)
+    ui.kpi(a1, "Leads del periodo", num(_t["leads"]), "Altas con `uvic_curso`")
+    ui.kpi(a2, "Intentos de contacto", num(_t["intentos"]),
+           f"{num(_t['intentos']/_t['leads'],1) if _t['leads'] else 0} por lead")
+    ui.kpi(a3, "Llamadas", num(_t["llamadas"]),
+           f"{pct(_act['llamadas']['tasa'],1)} conectadas",
+           estado="ok" if _act["llamadas"]["tasa"] >= 0.3 else "warn")
+    ui.kpi(a4, "Emails", num(_t["emails"]), "Enviados en el periodo")
+    ui.kpi(a5, "Reuniones y tareas", num(_t["reuniones"] + _t["tareas"]),
+           f"{num(_t['reuniones'])} reuniones · {num(_t['tareas'])} tareas")
+
+    # --- Tabla maestra: captación + actividad, por programa ------------------ #
+    _lp = _act["leads_prog"]
+    _ap = _act["act_prog"]
+    tabla_prog = _ap.merge(_lp, on="programa", how="outer").fillna(0)
+    for _c in ("leads", "intentos", "sin_contactar", "llamadas", "emails",
+               "reuniones", "tareas", "actividades"):
+        if _c in tabla_prog.columns:
+            tabla_prog[_c] = tabla_prog[_c].astype(int)
+    tabla_prog["act_por_lead"] = tabla_prog.apply(
+        lambda r: r["actividades"] / r["leads"] if r["leads"] else 0, axis=1).round(1)
+    tabla_prog = tabla_prog.sort_values("leads", ascending=False)
+
+    ui.tabla_totales(
+        tabla_prog,
+        columnas=["programa", "leads", "intentos", "media_intentos", "sin_contactar",
+                  "llamadas", "emails", "reuniones", "tareas", "actividades",
+                  "act_por_lead"],
+        sum_cols=["leads", "intentos", "sin_contactar", "llamadas", "emails",
+                  "reuniones", "tareas", "actividades"],
+        ratios={
+            "media_intentos": ("intentos", "leads", 1, ""),
+            "act_por_lead": ("actividades", "leads", 1, ""),
+        },
+        column_config={
+            "programa": "Programa",
+            "leads": st.column_config.NumberColumn("Leads", format="%d"),
+            "intentos": st.column_config.NumberColumn("Intentos", format="%d"),
+            "media_intentos": st.column_config.NumberColumn("Intentos/lead", format="%.2f"),
+            "sin_contactar": st.column_config.NumberColumn("Sin contactar", format="%d"),
+            "llamadas": st.column_config.NumberColumn("Llamadas", format="%d"),
+            "emails": st.column_config.NumberColumn("Emails", format="%d"),
+            "reuniones": st.column_config.NumberColumn("Reuniones", format="%d"),
+            "tareas": st.column_config.NumberColumn("Tareas", format="%d"),
+            "actividades": st.column_config.NumberColumn("Actividades", format="%d"),
+            "act_por_lead": st.column_config.NumberColumn("Activ./lead", format="%.1f"),
+        },
+    )
+    st.caption(
+        "**Intentos** = `num_contacted_notes` de los leads captados en el periodo. "
+        "**Actividades** = llamadas, emails, reuniones y tareas registradas en el "
+        "periodo sobre leads UVic."
+    )
+
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        st.markdown("**Leads captados por programa**")
+        _g = tabla_prog[tabla_prog["leads"] > 0][["programa", "leads"]]
+        if _g.empty:
+            st.info("Sin leads en el periodo.")
+        else:
+            ui.barras_horizontales(_g.sort_values("leads", ascending=False),
+                                   "programa", "leads", x_label="Leads")
+    with col_p2:
+        st.markdown("**Actividades por programa**")
+        _g2 = tabla_prog[tabla_prog["actividades"] > 0][["programa", "actividades"]]
+        if _g2.empty:
+            st.info("Sin actividad en el periodo.")
+        else:
+            ui.barras_horizontales(_g2.sort_values("actividades", ascending=False),
+                                   "programa", "actividades", x_label="Actividades")
+
+    # --- Llamadas por resultado --------------------------------------------- #
+    _res = _act["llamadas"]["por_resultado"]
+    if _res:
+        col_r1, col_r2 = st.columns([0.45, 0.55])
+        with col_r1:
+            st.markdown("**Resultado de las llamadas**")
+            _dfr = (pd.DataFrame([{"resultado": k, "llamadas": v} for k, v in _res.items()])
+                    .sort_values("llamadas", ascending=False))
+            ui.tabla_totales(
+                _dfr, columnas=["resultado", "llamadas"], sum_cols=["llamadas"],
+                column_config={
+                    "resultado": "Resultado",
+                    "llamadas": st.column_config.NumberColumn("Llamadas", format="%d"),
+                },
+            )
+        with col_r2:
+            st.markdown("**Duración media de llamada**")
+            st.metric("Segundos por llamada conectada",
+                      f"{_act['llamadas']['dur_media']:.0f} s")
+            st.caption(
+                f"{num(_act['llamadas']['conectadas'])} llamadas conectadas de "
+                f"{num(_act['llamadas']['total'])} ({pct(_act['llamadas']['tasa'],1)})."
+            )
+
+    # --- Detalle por lead ---------------------------------------------------- #
+    _det = _act["detalle"]
+    if not _det.empty:
+        with st.expander(f"Detalle de los {len(_det)} leads del periodo", expanded=False):
+            _progs = ["Todos"] + sorted(_det["programa"].unique().tolist())
+            _sel = st.selectbox("Programa", _progs, key="prog_detalle_act")
+            _d = _det if _sel == "Todos" else _det[_det["programa"] == _sel]
+            st.dataframe(
+                _d[["nombre", "email", "programa", "comercial", "fecha_creacion",
+                    "intentos", "ult_contacto", "estado"]]
+                .sort_values("intentos", ascending=False),
+                width="stretch", hide_index=True,
+                column_config={
+                    "nombre": "Lead", "email": "Email", "programa": "Programa",
+                    "comercial": "Propietario",
+                    "fecha_creacion": st.column_config.DateColumn("Alta", format="DD/MM/YYYY"),
+                    "intentos": st.column_config.NumberColumn("Intentos", format="%d"),
+                    "ult_contacto": st.column_config.DateColumn("Últ. contacto", format="DD/MM/YYYY"),
+                    "estado": "Estado",
+                },
+            )
 
 st.divider()
 

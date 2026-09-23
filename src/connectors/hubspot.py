@@ -607,6 +607,30 @@ def _disposiciones(token: str) -> dict:
     return dict(_DISPOSICIONES_DEFAULT)
 
 
+def _asociadas_por_contacto(token: str, ids: list, tipo: str) -> dict:
+    """{contact_id: [activity_id, …]} para actividades de `tipo`.
+
+    Igual que `_asociadas` pero conservando a qué contacto pertenece cada
+    actividad, necesario para repartirlas por programa."""
+    from collections import defaultdict
+
+    out = defaultdict(list)
+    for i in range(0, len(ids), 100):
+        try:
+            r = _peticion("POST", f"{API}/crm/v4/associations/contact/{tipo}/batch/read",
+                          headers=_headers(token),
+                          json={"inputs": [{"id": c} for c in ids[i:i + 100]]}, timeout=60)
+            if r.status_code not in (200, 207):
+                continue
+            for it in r.json().get("results", []):
+                cid = str(it.get("from", {}).get("id"))
+                for t in it.get("to", []):
+                    out[cid].append(str(t.get("toObjectId")))
+        except Exception:  # noqa: BLE001
+            continue
+    return dict(out)
+
+
 def _asociadas(token: str, ids: list, tipo: str) -> set:
     """IDs de actividades de `tipo` (calls/emails/…) asociadas a esos contactos."""
     import requests
@@ -639,14 +663,17 @@ def actividad_uvic():
         return None, "sample"
     token = creds["access_token"]
 
-    # 1) Contactos UVIC de Vanina (sin IMPORT/webinar) con propiedades de actividad.
+    # 1) Contactos UVIC del equipo comercial (sin IMPORT/webinar) con propiedades
+    #    de actividad. El equipo son Vanina (cartera histórica) y Jorge (altas nuevas).
     props = ["firstname", "lastname", "email", "uvic_curso", "num_contacted_notes",
              "num_notes", "notes_last_contacted", "hs_lead_status", "hs_object_source",
-             "uvic_utm_campaign", "uvic_utm_source", "uvic_utm_medium"]
+             "uvic_utm_campaign", "uvic_utm_source", "uvic_utm_medium",
+             "hubspot_owner_id"]
     payload = {
         "filterGroups": [{"filters": [
             {"propertyName": "uvic_curso", "operator": "HAS_PROPERTY"},
-            {"propertyName": "hubspot_owner_id", "operator": "EQ", "value": config.HUBSPOT_OWNER_UVIC},
+            {"propertyName": "hubspot_owner_id", "operator": "IN",
+             "values": list(config.HUBSPOT_OWNERS_UVIC)},
         ]}],
         "properties": props, "limit": 100,
     }
@@ -680,6 +707,8 @@ def actividad_uvic():
                     ult_contacto=ult,
                     dias_sin_contacto=dias,
                     estado=p.get("hs_lead_status") or "Sin estado",
+                    comercial=config.HUBSPOT_OWNERS_UVIC.get(
+                        p.get("hubspot_owner_id") or "", "Sin propietario"),
                 ))
             after = data.get("paging", {}).get("next", {}).get("after")
             if not after:
@@ -728,5 +757,172 @@ def actividad_uvic():
                       tasa=(conect / len(call_ids)) if call_ids else 0.0,
                       dur_media=(sum(dur) / len(dur)) if dur else 0.0,
                       por_resultado=por_res),
+    )
+    return estruct, "api"
+
+
+# --------------------------------------------------------------------------- #
+# Actividad comercial por programa, acotada a un periodo
+# --------------------------------------------------------------------------- #
+def actividad_por_programa(desde, hasta):
+    """Leads UVIC y su actividad comercial, ambos desglosados por programa y
+    acotados al periodo [desde, hasta].
+
+    A diferencia de `actividad_uvic()` (foto acumulada de la cartera), aquí:
+    - los **leads** se cuentan por su fecha de creación dentro del periodo;
+    - las **actividades** (llamadas, emails, reuniones, tareas) se cuentan por su
+      `hs_timestamp` dentro del periodo, y solo las asociadas a leads UVIC.
+
+    Devuelve (estructura, origen) con:
+      leads_prog   df [programa, leads, intentos, media_intentos, sin_contactar]
+      act_prog     df [programa, llamadas, emails, reuniones, tareas, actividades]
+      llamadas     dict {total, conectadas, tasa, dur_media, por_resultado}
+      detalle      df por lead del periodo
+      totales      dict con los agregados del periodo
+    """
+    creds = _leer_secreto("hubspot")
+    if not (creds and creds.get("access_token")):
+        return None, "sample"
+    token = creds["access_token"]
+
+    # 1) Cartera UVIC: contactos con uvic_curso de los comerciales de UVIC.
+    props = ["firstname", "lastname", "email", "uvic_curso", "createdate",
+             "num_contacted_notes", "num_notes", "notes_last_contacted",
+             "hs_lead_status", "hs_object_source", "hubspot_owner_id",
+             "uvic_utm_campaign", "uvic_utm_source", "uvic_utm_medium"]
+    payload = {
+        "filterGroups": [{"filters": [
+            {"propertyName": "uvic_curso", "operator": "HAS_PROPERTY"},
+            {"propertyName": "hubspot_owner_id", "operator": "IN",
+             "values": list(config.HUBSPOT_OWNERS_UVIC)},
+        ]}],
+        "properties": props, "limit": 100,
+    }
+    filas, after = [], None
+    try:
+        while True:
+            if after:
+                payload["after"] = after
+            r = _peticion("POST", f"{API}/crm/v3/objects/contacts/search",
+                          headers=_headers(token), json=payload, timeout=60)
+            data = r.json()
+            for c in data.get("results", []):
+                p = c.get("properties", {})
+                if p.get("hs_object_source") == "IMPORT":
+                    continue
+                if config.excluir_webinar(p.get("uvic_utm_campaign"),
+                                          p.get("uvic_utm_source"),
+                                          p.get("uvic_utm_medium")):
+                    continue
+                nombre = f"{p.get('firstname','') or ''} {p.get('lastname','') or ''}".strip()
+                filas.append(dict(
+                    lead_id=str(c["id"]),
+                    nombre=nombre or (p.get("email") or "—"),
+                    email=p.get("email") or "",
+                    programa=config.programa_por_curso(p.get("uvic_curso") or ""),
+                    fecha_creacion=_a_fecha(p.get("createdate")),
+                    intentos=int(p.get("num_contacted_notes") or 0),
+                    actividades_hist=int(p.get("num_notes") or 0),
+                    ult_contacto=_a_fecha(p.get("notes_last_contacted")),
+                    estado=p.get("hs_lead_status") or "Sin estado",
+                    comercial=config.HUBSPOT_OWNERS_UVIC.get(
+                        p.get("hubspot_owner_id") or "", "Sin propietario"),
+                ))
+            after = data.get("paging", {}).get("next", {}).get("after")
+            if not after:
+                break
+    except Exception as e:  # noqa: BLE001
+        return None, f"error ({e})"
+
+    cartera = pd.DataFrame(filas)
+    if cartera.empty:
+        return None, "api"
+
+    prog_por_lead = dict(zip(cartera["lead_id"], cartera["programa"]))
+    ids = cartera["lead_id"].tolist()
+
+    # 2) Actividades asociadas, con su fecha, filtradas al periodo.
+    TIPOS = {"calls": "llamadas", "emails": "emails",
+             "meetings": "reuniones", "tasks": "tareas"}
+    act_por_prog = {etq: {} for etq in TIPOS.values()}
+    por_resultado, duraciones = {}, []
+    disp = _disposiciones(token)
+    total_por_tipo = {}
+
+    for tipo, etiqueta in TIPOS.items():
+        mapa = _asociadas_por_contacto(token, ids, tipo)
+        act_ids = sorted({a for lst in mapa.values() for a in lst})
+        contactos_de = {}
+        for cid, lst in mapa.items():
+            for a in lst:
+                contactos_de.setdefault(a, []).append(cid)
+
+        extra = ["hs_call_disposition", "hs_call_duration"] if tipo == "calls" else []
+        en_periodo = 0
+        for i in range(0, len(act_ids), 100):
+            try:
+                r = _peticion("POST", f"{API}/crm/v3/objects/{tipo}/batch/read",
+                              headers=_headers(token),
+                              json={"properties": ["hs_timestamp"] + extra,
+                                    "inputs": [{"id": a} for a in act_ids[i:i + 100]]},
+                              timeout=60)
+            except Exception:  # noqa: BLE001
+                continue
+            for x in r.json().get("results", []):
+                pp = x.get("properties", {})
+                f = _a_fecha(pp.get("hs_timestamp"))
+                if not (f and desde <= f <= hasta):
+                    continue
+                en_periodo += 1
+                for cid in contactos_de.get(str(x["id"]), []):
+                    prog = prog_por_lead.get(cid, "Sin asignar")
+                    act_por_prog[etiqueta][prog] = act_por_prog[etiqueta].get(prog, 0) + 1
+                if tipo == "calls":
+                    lbl = disp.get(pp.get("hs_call_disposition"), "Sin resultado")
+                    por_resultado[lbl] = por_resultado.get(lbl, 0) + 1
+                    d = pp.get("hs_call_duration")
+                    if d and int(d) > 0:
+                        duraciones.append(int(d) / 1000)
+        total_por_tipo[etiqueta] = en_periodo
+
+    # 3) Leads creados dentro del periodo, por programa.
+    periodo = cartera[cartera["fecha_creacion"].notna()]
+    periodo = periodo[(periodo["fecha_creacion"] >= desde) & (periodo["fecha_creacion"] <= hasta)]
+    if periodo.empty:
+        leads_prog = pd.DataFrame(columns=["programa", "leads", "intentos",
+                                           "media_intentos", "sin_contactar"])
+    else:
+        leads_prog = periodo.groupby("programa", as_index=False).agg(
+            leads=("lead_id", "count"),
+            intentos=("intentos", "sum"),
+            media_intentos=("intentos", "mean"),
+            sin_contactar=("intentos", lambda s: int((s == 0).sum())),
+        )
+        leads_prog["media_intentos"] = leads_prog["media_intentos"].round(2)
+
+    # 4) Tabla de actividad por programa (todos los programas vistos).
+    programas = sorted(set(cartera["programa"]) | {p for d in act_por_prog.values() for p in d})
+    act_prog = pd.DataFrame([
+        dict(programa=p, **{etq: act_por_prog[etq].get(p, 0) for etq in TIPOS.values()})
+        for p in programas
+    ])
+    if not act_prog.empty:
+        act_prog["actividades"] = act_prog[list(TIPOS.values())].sum(axis=1)
+
+    n_llamadas = total_por_tipo.get("llamadas", 0)
+    conect = por_resultado.get("Conectado", 0)
+    estruct = dict(
+        leads_prog=leads_prog,
+        act_prog=act_prog,
+        detalle=periodo.reset_index(drop=True),
+        cartera=cartera,
+        llamadas=dict(total=n_llamadas, conectadas=conect,
+                      tasa=(conect / n_llamadas) if n_llamadas else 0.0,
+                      dur_media=(sum(duraciones) / len(duraciones)) if duraciones else 0.0,
+                      por_resultado=por_resultado),
+        totales=dict(leads=int(len(periodo)),
+                     cartera=int(len(cartera)),
+                     intentos=int(periodo["intentos"].sum()) if not periodo.empty else 0,
+                     **total_por_tipo),
     )
     return estruct, "api"

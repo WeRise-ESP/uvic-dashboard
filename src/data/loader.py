@@ -83,6 +83,14 @@ def cargar_actividad():
     return hubspot.actividad_uvic()
 
 
+@st.cache_data(max_entries=4, ttl=config.CACHE_TTL_HUBSPOT,
+               show_spinner="Cargando actividad por programa…")
+def cargar_actividad_programa(desde, hasta):
+    """Leads y actividad comercial por programa dentro del periodo.
+    Devuelve (estructura, origen)."""
+    return hubspot.actividad_por_programa(desde, hasta)
+
+
 @st.cache_data(max_entries=2, ttl=config.CACHE_TTL_HUBSPOT, show_spinner="Cargando pipeline actual…")
 def cargar_pipeline_actual():
     """Foto de hoy del tablero Pipeline UVIC (sin filtro de periodo).

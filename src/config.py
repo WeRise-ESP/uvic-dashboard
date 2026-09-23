@@ -335,9 +335,15 @@ HUBSPOT_ETAPAS_TODAS = [e for _, e in HUBSPOT_ETAPAS_UVIC] + [HUBSPOT_ETAPA_PERD
 # Propiedad de deal con el motivo de pérdida (enum "Motivo de cierre perdido").
 HUBSPOT_PROP_MOTIVO_PERDIDO = "motivo_de_cierre_perdido"
 
-# Comercial de UVIC (owner de HubSpot). Los leads UVIC reales están asignados a
-# Vanina Correa; los de otros comerciales (Rise, etc.) NO cuentan como UVIC.
-HUBSPOT_OWNER_UVIC = "35568616"  # Vanina Correa (vaninamicaela.correa@uvic.cat)
+# Comerciales de UVIC (owners de HubSpot). Los leads UVIC reales están asignados a
+# este equipo; los de otros comerciales (Rise, etc.) NO cuentan como UVIC.
+# Desde sep-2026 los leads nuevos de "Curso UVIC" los recibe Jorge Jiménez (vía
+# workflow), mientras que la cartera histórica sigue a nombre de Vanina.
+HUBSPOT_OWNERS_UVIC = {
+    "35568616": "Vanina Correa",   # vaninamicaela.correa@uvic.cat
+    "37527221": "Jorge Jiménez",   # jorge.jimenez@uvic.cat
+}
+HUBSPOT_OWNER_UVIC = "35568616"  # compatibilidad: owner histórico
 
 
 # --------------------------------------------------------------------------- #
